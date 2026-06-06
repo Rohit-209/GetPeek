@@ -94,46 +94,51 @@ async function clearCache() {
 // TRANSCRIPT FETCHER
 // ============================================================
 
-const INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-const INNERTUBE_CONTEXT = {
-  client: {
-    clientName: 'WEB',
-    clientVersion: '2.20250606.01.00'
-  }
-};
-
+/**
+ * Fetch transcript by scraping the YouTube watch page HTML.
+ * This works because the page embeds ytInitialPlayerResponse
+ * which contains caption track URLs. Unlike the Innertube API,
+ * a simple GET to the watch page doesn't return 403.
+ */
 async function fetchTranscript(videoId) {
   try {
     console.log('[GetPeek] Fetching transcript for:', videoId);
 
-    const playerResponse = await fetchWithTimeout(INNERTUBE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        context: INNERTUBE_CONTEXT,
-        videoId: videoId
-      })
-    });
-
-    if (!playerResponse.ok) {
-      console.error('[GetPeek] Innertube HTTP error:', playerResponse.status);
-      if (playerResponse.status === 429) {
-        return { error: 'YouTube rate limit reached. Try again in a moment.' };
+    // Step 1: Fetch the YouTube watch page HTML
+    const pageUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    const pageResponse = await fetchWithTimeout(pageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9'
       }
-      return { error: `Failed to fetch video info (HTTP ${playerResponse.status}).` };
+    }, 15000);
+
+    if (!pageResponse.ok) {
+      console.error('[GetPeek] Page fetch error:', pageResponse.status);
+      return { error: `Failed to load video page (HTTP ${pageResponse.status}).` };
     }
 
-    const playerData = await playerResponse.json();
+    const html = await pageResponse.text();
+    console.log('[GetPeek] Page fetched, length:', html.length);
+
+    // Step 2: Extract ytInitialPlayerResponse from the page
+    const playerData = extractPlayerResponse(html);
+    if (!playerData) {
+      return { error: 'Could not extract video data from the page.' };
+    }
+
     console.log('[GetPeek] Playability:', playerData?.playabilityStatus?.status);
 
-    if (playerData?.playabilityStatus?.status === 'ERROR') {
-      return { error: 'Video is unavailable.' };
+    if (playerData?.playabilityStatus?.status === 'ERROR' ||
+        playerData?.playabilityStatus?.status === 'LOGIN_REQUIRED') {
+      return { error: 'Video is unavailable or requires login.' };
     }
 
     if (playerData.videoDetails?.isLiveContent && playerData.videoDetails?.isLive) {
       return { error: 'Live streams cannot be summarized.' };
     }
 
+    // Step 3: Get caption tracks
     const captionTracks = playerData?.captions
       ?.playerCaptionsTracklistRenderer
       ?.captionTracks;
@@ -149,6 +154,8 @@ async function fetchTranscript(videoId) {
     }
 
     console.log('[GetPeek] Using track:', track.languageCode, track.kind || 'manual');
+
+    // Step 4: Fetch the actual transcript XML/JSON
     const transcriptUrl = track.baseUrl + '&fmt=json3';
     const transcriptResponse = await fetchWithTimeout(transcriptUrl);
 
@@ -179,6 +186,40 @@ async function fetchTranscript(videoId) {
     }
     return { error: 'Failed to fetch transcript. Please try again.' };
   }
+}
+
+/**
+ * Extract ytInitialPlayerResponse JSON from YouTube page HTML.
+ */
+function extractPlayerResponse(html) {
+  // Try var ytInitialPlayerResponse = {...};
+  const patterns = [
+    /var\s+ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var|<\/script>)/s,
+    /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var|<\/script>)/s
+  ];
+
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match && match[1]) {
+      try {
+        return JSON.parse(match[1]);
+      } catch (e) {
+        console.warn('[GetPeek] Failed to parse player response:', e.message);
+      }
+    }
+  }
+
+  // Fallback: try to find it in ytcfg or embedded script data
+  const altMatch = html.match(/ytInitialPlayerResponse"\s*:\s*(\{.+?\})\s*,\s*"/s);
+  if (altMatch && altMatch[1]) {
+    try {
+      return JSON.parse(altMatch[1]);
+    } catch (e) {
+      console.warn('[GetPeek] Failed to parse alt player response:', e.message);
+    }
+  }
+
+  return null;
 }
 
 function pickBestTrack(tracks) {
