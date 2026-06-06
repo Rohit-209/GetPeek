@@ -154,17 +154,41 @@ async function fetchTranscript(videoId) {
     }
 
     console.log('[GetPeek] Using track:', track.languageCode, track.kind || 'manual');
+    console.log('[GetPeek] Caption baseUrl:', track.baseUrl.substring(0, 120) + '...');
 
-    // Step 4: Fetch the actual transcript XML/JSON
-    const transcriptUrl = track.baseUrl + '&fmt=json3';
-    const transcriptResponse = await fetchWithTimeout(transcriptUrl);
+    // Step 4: Fetch the actual transcript — try json3 first, fall back to XML
+    let text = null;
 
-    if (!transcriptResponse.ok) {
-      return { error: 'Failed to fetch video transcript.' };
+    // Try JSON format
+    try {
+      const jsonUrl = track.baseUrl + '&fmt=json3';
+      const jsonResponse = await fetchWithTimeout(jsonUrl);
+      if (jsonResponse.ok) {
+        const rawText = await jsonResponse.text();
+        console.log('[GetPeek] json3 response length:', rawText.length, 'first 200:', rawText.substring(0, 200));
+        if (rawText.length > 0) {
+          const transcriptData = JSON.parse(rawText);
+          text = parseTranscriptEvents(transcriptData.events || []);
+        }
+      }
+    } catch (jsonErr) {
+      console.warn('[GetPeek] json3 format failed, trying XML:', jsonErr.message);
     }
 
-    const transcriptData = await transcriptResponse.json();
-    const text = parseTranscriptEvents(transcriptData.events || []);
+    // Fall back to XML (default format)
+    if (!text) {
+      try {
+        const xmlResponse = await fetchWithTimeout(track.baseUrl);
+        if (xmlResponse.ok) {
+          const xmlText = await xmlResponse.text();
+          console.log('[GetPeek] XML response length:', xmlText.length, 'first 200:', xmlText.substring(0, 200));
+          text = parseTranscriptXml(xmlText);
+        }
+      } catch (xmlErr) {
+        console.error('[GetPeek] XML format also failed:', xmlErr.message);
+        return { error: 'Failed to fetch video transcript.' };
+      }
+    }
 
     if (!text || text.trim().length < 20) {
       return { error: 'Transcript is too short or empty.' };
@@ -237,6 +261,30 @@ function parseTranscriptEvents(events) {
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Parse transcript from YouTube's default XML caption format.
+ * Format: <transcript><text start="0" dur="5.2">Hello world</text>...</transcript>
+ */
+function parseTranscriptXml(xml) {
+  const textRegex = /<text[^>]*>([\s\S]*?)<\/text>/g;
+  const parts = [];
+  let match;
+  while ((match = textRegex.exec(xml)) !== null) {
+    // Decode HTML entities
+    let text = match[1]
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/&apos;/g, "'")
+      .replace(/<[^>]+>/g, '') // strip any nested tags
+      .trim();
+    if (text) parts.push(text);
+  }
+  return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 // ============================================================
