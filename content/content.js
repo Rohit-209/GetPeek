@@ -1,19 +1,18 @@
 /**
- * GetPeek — Content Script
+ * GetPeek — Content Script (isolated world)
  * Detects hover on YouTube video thumbnails, extracts video ID,
- * requests summary from background service worker, renders overlay.
+ * requests transcript via page bridge (MAIN world), then sends
+ * transcript to service worker for AI summarization.
  */
 
 // overlay.js is loaded before this file via manifest content_scripts
 
-const HOVER_DELAY = 800; // ms before triggering summary fetch
+const HOVER_DELAY = 800;
 let hoverTimer = null;
 let currentVideoId = null;
-let abortController = null;
 
 /**
  * Extract video ID from a YouTube link element.
- * Handles /watch?v=, /shorts/, and youtu.be formats.
  */
 function extractVideoId(element) {
   const anchor = element.closest('a[href]') || element.querySelector('a[href]');
@@ -22,11 +21,9 @@ function extractVideoId(element) {
   const href = anchor.getAttribute('href');
   if (!href) return null;
 
-  // /watch?v=VIDEO_ID
   const watchMatch = href.match(/\/watch\?v=([a-zA-Z0-9_-]{11})/);
   if (watchMatch) return watchMatch[1];
 
-  // /shorts/VIDEO_ID
   const shortsMatch = href.match(/\/shorts\/([a-zA-Z0-9_-]{11})/);
   if (shortsMatch) return shortsMatch[1];
 
@@ -37,7 +34,6 @@ function extractVideoId(element) {
  * Find the thumbnail container element from any child element.
  */
 function findThumbnailContainer(target) {
-  // Walk up to find the thumbnail wrapper
   const selectors = [
     'ytd-thumbnail',
     'ytd-playlist-thumbnail',
@@ -54,9 +50,6 @@ function findThumbnailContainer(target) {
   return null;
 }
 
-/**
- * Handle mouse entering a thumbnail area.
- */
 function onThumbnailEnter(event) {
   const container = findThumbnailContainer(event.target);
   if (!container) return;
@@ -64,7 +57,6 @@ function onThumbnailEnter(event) {
   const videoId = extractVideoId(container);
   if (!videoId || videoId === currentVideoId) return;
 
-  // Clear any pending hover
   clearTimeout(hoverTimer);
 
   hoverTimer = setTimeout(() => {
@@ -73,63 +65,72 @@ function onThumbnailEnter(event) {
   }, HOVER_DELAY);
 }
 
-/**
- * Handle mouse leaving a thumbnail area.
- */
 function onThumbnailLeave(event) {
   const container = findThumbnailContainer(event.target);
   if (!container) return;
 
-  // Check if we're moving to a child element (not actually leaving)
   const related = event.relatedTarget;
   if (related && container.contains(related)) return;
 
   clearTimeout(hoverTimer);
-
-  // Abort any in-flight request
-  if (abortController) {
-    abortController.abort();
-    abortController = null;
-  }
-
   currentVideoId = null;
   hideOverlay();
 }
 
 /**
- * Request summary from background service worker.
+ * Request transcript from page bridge, then summary from service worker.
  */
 async function requestSummary(videoId, anchorElement) {
-  // Abort previous request if any
-  if (abortController) abortController.abort();
-  abortController = new AbortController();
-
-  // Show loading state
   showOverlay(anchorElement, { loading: true, videoId });
 
   try {
-    // Race the message against a 45-second timeout so we never hang forever
+    // Step 1: Check if we already have a cached summary
+    const cached = await chrome.runtime.sendMessage({ type: 'CHECK_CACHE', videoId });
+    if (cached && cached.data) {
+      if (currentVideoId === videoId) {
+        updateOverlay({ data: cached.data, videoId });
+      }
+      return;
+    }
+
+    // Step 2: Fetch transcript via page bridge (MAIN world, has YouTube cookies)
+    const transcriptResult = await fetchTranscriptViaBridge(videoId);
+
+    if (currentVideoId !== videoId) return;
+
+    if (transcriptResult.error) {
+      updateOverlay({ error: transcriptResult.error, videoId });
+      return;
+    }
+
+    // Step 3: Send transcript to service worker for Gemini summarization
+    updateOverlay({ loading: true, videoId }); // still loading — now summarizing
+
     const response = await Promise.race([
-      chrome.runtime.sendMessage({ type: 'GET_SUMMARY', videoId }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('timeout')), 45000)
-      )
+      chrome.runtime.sendMessage({
+        type: 'SUMMARIZE',
+        videoId,
+        transcript: transcriptResult.data.transcript,
+        language: transcriptResult.data.language,
+        truncated: transcriptResult.data.truncated
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 45000))
     ]);
 
-    // Check if we're still hovering the same video
     if (currentVideoId !== videoId) return;
 
     if (!response) {
-      updateOverlay({ error: 'No response from service worker. Try reloading the extension.', videoId });
+      updateOverlay({ error: 'No response from service worker.', videoId });
     } else if (response.error) {
       updateOverlay({ error: response.error, videoId });
     } else {
       updateOverlay({ data: response.data, videoId });
     }
+
   } catch (err) {
     if (currentVideoId === videoId) {
       const msg = err.message === 'timeout'
-        ? 'Request timed out. The service worker may not be running — try reloading the extension.'
+        ? 'Request timed out. Try again.'
         : 'Failed to get summary. Please try again.';
       updateOverlay({ error: msg, videoId });
     }
@@ -137,24 +138,55 @@ async function requestSummary(videoId, anchorElement) {
 }
 
 /**
- * Initialize hover listeners using event delegation.
+ * Fetch transcript via the page bridge (MAIN world script).
+ * Uses CustomEvents to communicate across world boundaries.
+ */
+function fetchTranscriptViaBridge(videoId) {
+  return new Promise((resolve) => {
+    const requestId = Math.random().toString(36).slice(2);
+    const timeout = setTimeout(() => {
+      window.removeEventListener('getpeek-transcript-result', handler);
+      resolve({ error: 'Transcript fetch timed out.' });
+    }, 20000);
+
+    function handler(event) {
+      if (event.detail && event.detail.requestId === requestId) {
+        clearTimeout(timeout);
+        window.removeEventListener('getpeek-transcript-result', handler);
+        if (event.detail.error) {
+          resolve({ error: event.detail.error });
+        } else {
+          resolve({ data: event.detail.data });
+        }
+      }
+    }
+
+    window.addEventListener('getpeek-transcript-result', handler);
+
+    // Dispatch request to the MAIN world page bridge
+    window.dispatchEvent(new CustomEvent('getpeek-fetch-transcript', {
+      detail: { videoId, requestId }
+    }));
+  });
+}
+
+/**
+ * Initialize.
  */
 function init() {
   createOverlay();
-
-  // Event delegation — capture phase to catch events on dynamic elements
   document.addEventListener('mouseover', onThumbnailEnter, true);
   document.addEventListener('mouseout', onThumbnailLeave, true);
 
-  // Handle YouTube SPA navigation
   window.addEventListener('yt-navigate-finish', () => {
     hideOverlay();
     currentVideoId = null;
     clearTimeout(hoverTimer);
   });
+
+  console.log('[GetPeek] Content script ready.');
 }
 
-// Run when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', init);
 } else {

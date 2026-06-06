@@ -1,6 +1,7 @@
 /**
- * GetPeek — Background Service Worker (single-file build)
- * Orchestrates transcript fetching, AI summarization, and caching.
+ * GetPeek — Background Service Worker
+ * Handles Gemini API summarization and caching.
+ * Transcript fetching is done by the page-bridge.js (MAIN world).
  */
 
 console.log('[GetPeek] Service worker starting...');
@@ -9,7 +10,7 @@ console.log('[GetPeek] Service worker starting...');
 // UTILITIES
 // ============================================================
 
-function fetchWithTimeout(url, options = {}, timeout = 15000) {
+function fetchWithTimeout(url, options = {}, timeout = 30000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
   return fetch(url, { ...options, signal: controller.signal })
@@ -65,8 +66,6 @@ async function trackRequest() {
   const dailyLimit = 1500;
   return {
     count: stats.requestsToday,
-    limit: dailyLimit,
-    warning: stats.requestsToday >= dailyLimit * 0.8,
     exceeded: stats.requestsToday >= dailyLimit
   };
 }
@@ -88,203 +87,6 @@ async function clearCache() {
     await chrome.storage.local.remove(cacheKeys);
   }
   return cacheKeys.length;
-}
-
-// ============================================================
-// TRANSCRIPT FETCHER
-// ============================================================
-
-/**
- * Fetch transcript by scraping the YouTube watch page HTML.
- * This works because the page embeds ytInitialPlayerResponse
- * which contains caption track URLs. Unlike the Innertube API,
- * a simple GET to the watch page doesn't return 403.
- */
-async function fetchTranscript(videoId) {
-  try {
-    console.log('[GetPeek] Fetching transcript for:', videoId);
-
-    // Step 1: Fetch the YouTube watch page HTML
-    const pageUrl = `https://www.youtube.com/watch?v=${videoId}`;
-    const pageResponse = await fetchWithTimeout(pageUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
-        'Accept-Language': 'en-US,en;q=0.9'
-      }
-    }, 15000);
-
-    if (!pageResponse.ok) {
-      console.error('[GetPeek] Page fetch error:', pageResponse.status);
-      return { error: `Failed to load video page (HTTP ${pageResponse.status}).` };
-    }
-
-    const html = await pageResponse.text();
-    console.log('[GetPeek] Page fetched, length:', html.length);
-
-    // Step 2: Extract ytInitialPlayerResponse from the page
-    const playerData = extractPlayerResponse(html);
-    if (!playerData) {
-      return { error: 'Could not extract video data from the page.' };
-    }
-
-    console.log('[GetPeek] Playability:', playerData?.playabilityStatus?.status);
-
-    if (playerData?.playabilityStatus?.status === 'ERROR' ||
-        playerData?.playabilityStatus?.status === 'LOGIN_REQUIRED') {
-      return { error: 'Video is unavailable or requires login.' };
-    }
-
-    if (playerData.videoDetails?.isLiveContent && playerData.videoDetails?.isLive) {
-      return { error: 'Live streams cannot be summarized.' };
-    }
-
-    // Step 3: Get caption tracks
-    const captionTracks = playerData?.captions
-      ?.playerCaptionsTracklistRenderer
-      ?.captionTracks;
-
-    if (!captionTracks || captionTracks.length === 0) {
-      return { error: 'No captions available for this video.' };
-    }
-
-    console.log('[GetPeek] Found', captionTracks.length, 'caption tracks');
-    const track = pickBestTrack(captionTracks);
-    if (!track) {
-      return { error: 'No suitable captions found.' };
-    }
-
-    console.log('[GetPeek] Using track:', track.languageCode, track.kind || 'manual');
-    console.log('[GetPeek] Caption baseUrl:', track.baseUrl.substring(0, 120) + '...');
-
-    // Step 4: Fetch the actual transcript — try json3 first, fall back to XML
-    let text = null;
-
-    // Try JSON format
-    try {
-      const jsonUrl = track.baseUrl + '&fmt=json3';
-      const jsonResponse = await fetchWithTimeout(jsonUrl);
-      if (jsonResponse.ok) {
-        const rawText = await jsonResponse.text();
-        console.log('[GetPeek] json3 response length:', rawText.length, 'first 200:', rawText.substring(0, 200));
-        if (rawText.length > 0) {
-          const transcriptData = JSON.parse(rawText);
-          text = parseTranscriptEvents(transcriptData.events || []);
-        }
-      }
-    } catch (jsonErr) {
-      console.warn('[GetPeek] json3 format failed, trying XML:', jsonErr.message);
-    }
-
-    // Fall back to XML (default format)
-    if (!text) {
-      try {
-        const xmlResponse = await fetchWithTimeout(track.baseUrl);
-        if (xmlResponse.ok) {
-          const xmlText = await xmlResponse.text();
-          console.log('[GetPeek] XML response length:', xmlText.length, 'first 200:', xmlText.substring(0, 200));
-          text = parseTranscriptXml(xmlText);
-        }
-      } catch (xmlErr) {
-        console.error('[GetPeek] XML format also failed:', xmlErr.message);
-        return { error: 'Failed to fetch video transcript.' };
-      }
-    }
-
-    if (!text || text.trim().length < 20) {
-      return { error: 'Transcript is too short or empty.' };
-    }
-
-    console.log('[GetPeek] Transcript:', text.length, 'chars');
-    const MAX_CHARS = 100000;
-    const truncated = text.length > MAX_CHARS;
-
-    return {
-      transcript: truncated ? text.slice(0, MAX_CHARS) : text,
-      language: track.languageCode,
-      truncated
-    };
-  } catch (err) {
-    console.error('[GetPeek] Transcript error:', err);
-    if (err.name === 'AbortError') {
-      return { error: 'Request timed out. Please try again.' };
-    }
-    return { error: 'Failed to fetch transcript. Please try again.' };
-  }
-}
-
-/**
- * Extract ytInitialPlayerResponse JSON from YouTube page HTML.
- */
-function extractPlayerResponse(html) {
-  // Try var ytInitialPlayerResponse = {...};
-  const patterns = [
-    /var\s+ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var|<\/script>)/s,
-    /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var|<\/script>)/s
-  ];
-
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match && match[1]) {
-      try {
-        return JSON.parse(match[1]);
-      } catch (e) {
-        console.warn('[GetPeek] Failed to parse player response:', e.message);
-      }
-    }
-  }
-
-  // Fallback: try to find it in ytcfg or embedded script data
-  const altMatch = html.match(/ytInitialPlayerResponse"\s*:\s*(\{.+?\})\s*,\s*"/s);
-  if (altMatch && altMatch[1]) {
-    try {
-      return JSON.parse(altMatch[1]);
-    } catch (e) {
-      console.warn('[GetPeek] Failed to parse alt player response:', e.message);
-    }
-  }
-
-  return null;
-}
-
-function pickBestTrack(tracks) {
-  return tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
-    || tracks.find(t => t.languageCode === 'en' && t.kind === 'asr')
-    || tracks.find(t => t.languageCode.startsWith('en'))
-    || tracks.find(t => t.kind !== 'asr')
-    || tracks[0];
-}
-
-function parseTranscriptEvents(events) {
-  return events
-    .filter(e => e.segs)
-    .map(e => e.segs.map(s => s.utf8 || '').join(''))
-    .join(' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * Parse transcript from YouTube's default XML caption format.
- * Format: <transcript><text start="0" dur="5.2">Hello world</text>...</transcript>
- */
-function parseTranscriptXml(xml) {
-  const textRegex = /<text[^>]*>([\s\S]*?)<\/text>/g;
-  const parts = [];
-  let match;
-  while ((match = textRegex.exec(xml)) !== null) {
-    // Decode HTML entities
-    let text = match[1]
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&apos;/g, "'")
-      .replace(/<[^>]+>/g, '') // strip any nested tags
-      .trim();
-    if (text) parts.push(text);
-  }
-  return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
 // ============================================================
@@ -324,10 +126,6 @@ Respond with ONLY valid JSON in this exact format:
 Produce 3-5 summary bullets and 3-8 topics.`;
 
 async function summarizeWithGemini(transcript, apiKey, model) {
-  if (!apiKey) {
-    return { error: 'No API key configured. Open GetPeek settings to add your Gemini API key.' };
-  }
-
   const modelName = model || DEFAULT_MODEL;
   const url = `${GEMINI_BASE_URL}/${modelName}:generateContent?key=${apiKey}`;
 
@@ -348,50 +146,39 @@ async function summarizeWithGemini(transcript, apiKey, model) {
     }
   };
 
-  try {
-    console.log('[GetPeek] Calling Gemini', modelName, '...');
-    const response = await fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }, 30000);
+  console.log('[GetPeek] Calling Gemini', modelName, '...');
+  const response = await fetchWithTimeout(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  }, 45000);
 
-    if (!response.ok) {
-      const status = response.status;
-      console.error('[GetPeek] Gemini HTTP error:', status);
-      if (status === 401 || status === 403) {
-        return { error: 'Invalid API key. Check your Gemini API key in GetPeek settings.' };
-      }
-      if (status === 429) {
-        return { error: 'Gemini rate limit reached. Try again later.' };
-      }
-      return { error: `Gemini API error (${status}). Please try again.` };
+  if (!response.ok) {
+    const status = response.status;
+    console.error('[GetPeek] Gemini HTTP error:', status);
+    if (status === 401 || status === 403) {
+      throw new Error('Invalid API key. Check your Gemini API key in GetPeek settings.');
     }
-
-    const result = await response.json();
-    const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      console.error('[GetPeek] Gemini empty response:', JSON.stringify(result).slice(0, 500));
-      return { error: 'Gemini returned an empty response.' };
+    if (status === 429) {
+      throw new Error('Gemini rate limit reached. Try again later.');
     }
-
-    const parsed = JSON.parse(text);
-    if (!Array.isArray(parsed.summary) || !Array.isArray(parsed.topics)) {
-      return { error: 'Gemini returned an unexpected format.' };
-    }
-
-    console.log('[GetPeek] Summary ready:', parsed.summary.length, 'points,', parsed.topics.length, 'topics');
-    return { data: parsed };
-  } catch (err) {
-    console.error('[GetPeek] Gemini error:', err);
-    if (err.name === 'AbortError') {
-      return { error: 'Gemini request timed out. Try a shorter video.' };
-    }
-    if (err instanceof SyntaxError) {
-      return { error: 'Failed to parse Gemini response.' };
-    }
-    return { error: 'Failed to connect to Gemini. Check your internet connection.' };
+    throw new Error(`Gemini API error (${status}).`);
   }
+
+  const result = await response.json();
+  const text = result?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    console.error('[GetPeek] Gemini empty response:', JSON.stringify(result).slice(0, 500));
+    throw new Error('Gemini returned an empty response.');
+  }
+
+  const parsed = JSON.parse(text);
+  if (!Array.isArray(parsed.summary) || !Array.isArray(parsed.topics)) {
+    throw new Error('Gemini returned an unexpected format.');
+  }
+
+  console.log('[GetPeek] Summary ready:', parsed.summary.length, 'points,', parsed.topics.length, 'topics');
+  return parsed;
 }
 
 // ============================================================
@@ -399,17 +186,21 @@ async function summarizeWithGemini(transcript, apiKey, model) {
 // ============================================================
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  console.log('[GetPeek] Received message:', message.type);
+  console.log('[GetPeek] Message:', message.type);
 
-  if (message.type === 'GET_SUMMARY') {
-    handleGetSummary(message.videoId)
-      .then(result => {
-        console.log('[GetPeek] Sending response:', result.error || 'success');
-        sendResponse(result);
-      })
+  if (message.type === 'CHECK_CACHE') {
+    getCachedSummary(message.videoId)
+      .then(data => sendResponse(data ? { data } : null))
+      .catch(() => sendResponse(null));
+    return true;
+  }
+
+  if (message.type === 'SUMMARIZE') {
+    handleSummarize(message)
+      .then(sendResponse)
       .catch(err => {
-        console.error('[GetPeek] Unhandled error:', err);
-        sendResponse({ error: 'Something went wrong. Please try again.' });
+        console.error('[GetPeek] Error:', err);
+        sendResponse({ error: err.message || 'Something went wrong.' });
       });
     return true;
   }
@@ -425,50 +216,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function handleGetSummary(videoId) {
-  try {
-    const cached = await getCachedSummary(videoId);
-    if (cached) {
-      console.log('[GetPeek] Cache hit for:', videoId);
-      return { data: cached };
-    }
-
-    const settings = await getSettings();
-    if (!settings.geminiApiKey) {
-      return { error: 'No API key configured. Right-click the GetPeek icon → Options to add your Gemini API key.' };
-    }
-
-    const quota = await trackRequest();
-    if (quota.exceeded) {
-      return { error: 'Daily request limit reached. Summaries will resume tomorrow.' };
-    }
-
-    const transcriptResult = await fetchTranscript(videoId);
-    if (transcriptResult.error) {
-      return { error: transcriptResult.error };
-    }
-
-    const summaryResult = await summarizeWithGemini(
-      transcriptResult.transcript,
-      settings.geminiApiKey,
-      settings.model
-    );
-    if (summaryResult.error) {
-      return { error: summaryResult.error };
-    }
-
-    const data = {
-      ...summaryResult.data,
-      language: transcriptResult.language,
-      truncated: transcriptResult.truncated || false
-    };
-
-    await setCachedSummary(videoId, data);
-    return { data };
-  } catch (err) {
-    console.error('[GetPeek] Pipeline error:', err);
-    return { error: 'Something went wrong. Please try again.' };
+async function handleSummarize({ videoId, transcript, language, truncated }) {
+  // Check cache first
+  const cached = await getCachedSummary(videoId);
+  if (cached) {
+    console.log('[GetPeek] Cache hit:', videoId);
+    return { data: cached };
   }
+
+  const settings = await getSettings();
+  if (!settings.geminiApiKey) {
+    return { error: 'No API key configured. Right-click the GetPeek icon → Options to add your Gemini API key.' };
+  }
+
+  const quota = await trackRequest();
+  if (quota.exceeded) {
+    return { error: 'Daily request limit reached. Summaries will resume tomorrow.' };
+  }
+
+  console.log('[GetPeek] Summarizing', transcript.length, 'chars for', videoId);
+
+  const parsed = await summarizeWithGemini(transcript, settings.geminiApiKey, settings.model);
+
+  const data = {
+    ...parsed,
+    language: language || 'en',
+    truncated: truncated || false
+  };
+
+  await setCachedSummary(videoId, data);
+  return { data };
 }
 
 console.log('[GetPeek] Service worker ready.');
