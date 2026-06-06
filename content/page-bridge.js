@@ -7,8 +7,6 @@
 (function () {
   'use strict';
 
-  const INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-
   // Listen for transcript requests from the content script
   window.addEventListener('getpeek-fetch-transcript', async (event) => {
     const { videoId, requestId } = event.detail;
@@ -16,17 +14,34 @@
     try {
       console.log('[GetPeek Bridge] Fetching transcript for:', videoId);
 
-      // Step 1: Call Innertube API with credentials (we're on youtube.com)
-      const playerResponse = await fetch(INNERTUBE_URL, {
+      // Get YouTube's own Innertube config from the page
+      const clientVersion = (typeof ytcfg !== 'undefined' && ytcfg.get)
+        ? ytcfg.get('INNERTUBE_CLIENT_VERSION')
+        : '2.20250101.00.00';
+      const apiKey = (typeof ytcfg !== 'undefined' && ytcfg.get)
+        ? ytcfg.get('INNERTUBE_API_KEY')
+        : '';
+      const clientName = (typeof ytcfg !== 'undefined' && ytcfg.get)
+        ? ytcfg.get('INNERTUBE_CLIENT_NAME')
+        : 'WEB';
+
+      console.log('[GetPeek Bridge] Using client:', clientName, clientVersion);
+
+      const innertubeUrl = apiKey
+        ? `https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`
+        : 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
+
+      // Step 1: Call Innertube API using YouTube's own client config
+      const playerResponse = await fetch(innertubeUrl, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           context: {
             client: {
-              clientName: 'WEB',
-              clientVersion: '2.20250606.01.00',
-              hl: 'en'
+              clientName: clientName,
+              clientVersion: clientVersion,
+              hl: document.documentElement.lang || 'en'
             }
           },
           videoId: videoId
