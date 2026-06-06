@@ -3,7 +3,7 @@
  * Orchestrates transcript fetching, AI summarization, and caching.
  */
 
-importScripts('transcript.js', 'gemini.js', 'cache.js');
+importScripts('background/transcript.js', 'background/gemini.js', 'background/cache.js');
 
 /**
  * Handle messages from content scripts.
