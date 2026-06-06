@@ -108,22 +108,30 @@ async function requestSummary(videoId, anchorElement) {
   showOverlay(anchorElement, { loading: true, videoId });
 
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'GET_SUMMARY',
-      videoId
-    });
+    // Race the message against a 45-second timeout so we never hang forever
+    const response = await Promise.race([
+      chrome.runtime.sendMessage({ type: 'GET_SUMMARY', videoId }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('timeout')), 45000)
+      )
+    ]);
 
     // Check if we're still hovering the same video
     if (currentVideoId !== videoId) return;
 
-    if (response.error) {
+    if (!response) {
+      updateOverlay({ error: 'No response from service worker. Try reloading the extension.', videoId });
+    } else if (response.error) {
       updateOverlay({ error: response.error, videoId });
     } else {
       updateOverlay({ data: response.data, videoId });
     }
   } catch (err) {
     if (currentVideoId === videoId) {
-      updateOverlay({ error: 'Failed to get summary. Please try again.', videoId });
+      const msg = err.message === 'timeout'
+        ? 'Request timed out. The service worker may not be running — try reloading the extension.'
+        : 'Failed to get summary. Please try again.';
+      updateOverlay({ error: msg, videoId });
     }
   }
 }
