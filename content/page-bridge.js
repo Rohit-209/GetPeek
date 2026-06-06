@@ -1,65 +1,46 @@
 /**
  * GetPeek — Page Bridge (runs in YouTube's MAIN world)
  * Has access to YouTube's cookies and JS context.
- * Communicates with the isolated content script via CustomEvents.
+ * Fetches video watch pages to extract transcript data.
  */
 
 (function () {
   'use strict';
 
-  // Listen for transcript requests from the content script
   window.addEventListener('getpeek-fetch-transcript', async (event) => {
     const { videoId, requestId } = event.detail;
 
     try {
       console.log('[GetPeek Bridge] Fetching transcript for:', videoId);
 
-      // Get YouTube's own Innertube config from the page
-      const clientVersion = (typeof ytcfg !== 'undefined' && ytcfg.get)
-        ? ytcfg.get('INNERTUBE_CLIENT_VERSION')
-        : '2.20250101.00.00';
-      const apiKey = (typeof ytcfg !== 'undefined' && ytcfg.get)
-        ? ytcfg.get('INNERTUBE_API_KEY')
-        : '';
-      const clientName = (typeof ytcfg !== 'undefined' && ytcfg.get)
-        ? ytcfg.get('INNERTUBE_CLIENT_NAME')
-        : 'WEB';
+      // Fetch the watch page (MAIN world fetch includes YouTube cookies)
+      const pageUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      const pageResponse = await fetch(pageUrl, { credentials: 'include' });
 
-      console.log('[GetPeek Bridge] Using client:', clientName, clientVersion);
-
-      const innertubeUrl = apiKey
-        ? `https://www.youtube.com/youtubei/v1/player?key=${apiKey}&prettyPrint=false`
-        : 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-
-      // Step 1: Call Innertube API using YouTube's own client config
-      const playerResponse = await fetch(innertubeUrl, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          context: {
-            client: {
-              clientName: clientName,
-              clientVersion: clientVersion,
-              hl: document.documentElement.lang || 'en'
-            }
-          },
-          videoId: videoId
-        })
-      });
-
-      if (!playerResponse.ok) {
-        sendResult(requestId, videoId, null, `YouTube API error (HTTP ${playerResponse.status})`);
+      if (!pageResponse.ok) {
+        sendResult(requestId, videoId, null, `Failed to load video page (HTTP ${pageResponse.status})`);
         return;
       }
 
-      const playerData = await playerResponse.json();
+      const html = await pageResponse.text();
+      console.log('[GetPeek Bridge] Page loaded, length:', html.length);
+
+      // Extract ytInitialPlayerResponse from the HTML
+      const playerData = extractPlayerResponse(html);
+      if (!playerData) {
+        sendResult(requestId, videoId, null, 'Could not extract video data.');
+        return;
+      }
+
       console.log('[GetPeek Bridge] Playability:', playerData?.playabilityStatus?.status);
 
-      // Check playability
-      if (playerData?.playabilityStatus?.status === 'ERROR' ||
-          playerData?.playabilityStatus?.status === 'LOGIN_REQUIRED') {
+      const playStatus = playerData?.playabilityStatus?.status;
+      if (playStatus === 'ERROR' || playStatus === 'LOGIN_REQUIRED') {
         sendResult(requestId, videoId, null, 'Video is unavailable.');
+        return;
+      }
+      if (playStatus === 'UNPLAYABLE') {
+        sendResult(requestId, videoId, null, 'Video is unplayable.');
         return;
       }
 
@@ -68,7 +49,7 @@
         return;
       }
 
-      // Step 2: Get caption tracks
+      // Get caption tracks
       const captionTracks = playerData?.captions
         ?.playerCaptionsTracklistRenderer
         ?.captionTracks;
@@ -79,8 +60,6 @@
       }
 
       console.log('[GetPeek Bridge] Found', captionTracks.length, 'caption tracks');
-
-      // Pick best track
       const track = pickBestTrack(captionTracks);
       if (!track) {
         sendResult(requestId, videoId, null, 'No suitable captions found.');
@@ -89,15 +68,16 @@
 
       console.log('[GetPeek Bridge] Using track:', track.languageCode, track.kind || 'manual');
 
-      // Step 3: Fetch transcript with credentials
+      // Fetch transcript (with cookies so signed URLs work)
       let transcript = null;
 
       // Try json3 format
-      const jsonUrl = setFmt(track.baseUrl, 'json3');
       try {
+        const jsonUrl = setFmt(track.baseUrl, 'json3');
         const resp = await fetch(jsonUrl, { credentials: 'include' });
         if (resp.ok) {
           const text = await resp.text();
+          console.log('[GetPeek Bridge] json3 length:', text.length);
           if (text.length > 0 && text.trimStart().startsWith('{')) {
             const data = JSON.parse(text);
             transcript = parseJson3(data);
@@ -109,14 +89,13 @@
 
       // Fallback: srv1 format
       if (!transcript) {
-        const srv1Url = setFmt(track.baseUrl, 'srv1');
         try {
+          const srv1Url = setFmt(track.baseUrl, 'srv1');
           const resp = await fetch(srv1Url, { credentials: 'include' });
           if (resp.ok) {
             const text = await resp.text();
-            if (text.length > 0) {
-              transcript = parseXml(text);
-            }
+            console.log('[GetPeek Bridge] srv1 length:', text.length);
+            if (text.length > 0) transcript = parseXml(text);
           }
         } catch (e) {
           console.warn('[GetPeek Bridge] srv1 failed:', e.message);
@@ -129,12 +108,13 @@
           const resp = await fetch(track.baseUrl, { credentials: 'include' });
           if (resp.ok) {
             const text = await resp.text();
+            console.log('[GetPeek Bridge] raw length:', text.length);
             if (text.length > 0) {
               transcript = parseXml(text) || text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
             }
           }
         } catch (e) {
-          console.warn('[GetPeek Bridge] raw URL failed:', e.message);
+          console.warn('[GetPeek Bridge] raw fetch failed:', e.message);
         }
       }
 
@@ -168,6 +148,49 @@
     }));
   }
 
+  /**
+   * Extract ytInitialPlayerResponse from YouTube page HTML.
+   * Uses brace-counting to reliably find the JSON boundaries.
+   */
+  function extractPlayerResponse(html) {
+    const marker = 'ytInitialPlayerResponse';
+    let idx = html.indexOf(marker);
+    if (idx === -1) return null;
+
+    // Find the opening brace
+    idx = html.indexOf('{', idx);
+    if (idx === -1) return null;
+
+    // Brace-counting with string awareness
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = idx; i < html.length; i++) {
+      const ch = html[i];
+
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\' && inString) { escaped = true; continue; }
+      if (ch === '"') { inString = !inString; continue; }
+
+      if (!inString) {
+        if (ch === '{') depth++;
+        else if (ch === '}') {
+          depth--;
+          if (depth === 0) {
+            try {
+              return JSON.parse(html.substring(idx, i + 1));
+            } catch (e) {
+              console.warn('[GetPeek Bridge] JSON parse failed:', e.message);
+              return null;
+            }
+          }
+        }
+      }
+    }
+    return null;
+  }
+
   function setFmt(url, fmt) {
     if (url.includes('&fmt=')) {
       return url.replace(/&fmt=[^&]+/, '&fmt=' + fmt);
@@ -194,31 +217,24 @@
   }
 
   function parseXml(xml) {
-    // Handle both <text> (srv1) and <p><s> (srv3) formats
     let parts = [];
 
-    // Try srv1: <text start="..." dur="...">content</text>
+    // srv1: <text start="..." dur="...">content</text>
     const textRegex = /<text[^>]*>([\s\S]*?)<\/text>/g;
     let match;
     while ((match = textRegex.exec(xml)) !== null) {
       const decoded = decodeEntities(match[1]);
       if (decoded.trim()) parts.push(decoded.trim());
     }
+    if (parts.length > 0) return parts.join(' ').replace(/\s+/g, ' ').trim();
 
-    if (parts.length > 0) {
-      return parts.join(' ').replace(/\s+/g, ' ').trim();
-    }
-
-    // Try srv3: <p t="..." d="..."><s>content</s></p>
+    // srv3: <p><s>content</s></p>
     const segRegex = /<s[^>]*>([\s\S]*?)<\/s>/g;
     while ((match = segRegex.exec(xml)) !== null) {
       const decoded = decodeEntities(match[1]);
       if (decoded.trim()) parts.push(decoded.trim());
     }
-
-    if (parts.length > 0) {
-      return parts.join(' ').replace(/\s+/g, ' ').trim();
-    }
+    if (parts.length > 0) return parts.join(' ').replace(/\s+/g, ' ').trim();
 
     return null;
   }
