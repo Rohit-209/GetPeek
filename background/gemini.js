@@ -70,11 +70,11 @@ async function summarizeWithGemini(transcript, apiKey, model) {
   };
 
   try {
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    });
+    }, 30000); // 30s timeout for Gemini (longer transcripts take time)
 
     if (!response.ok) {
       const status = response.status;
@@ -106,6 +106,9 @@ async function summarizeWithGemini(transcript, apiKey, model) {
     return { data: parsed };
   } catch (err) {
     console.error('[GetPeek] Gemini error:', err);
+    if (err.name === 'AbortError') {
+      return { error: 'Gemini request timed out. Try again or use a shorter video.' };
+    }
     if (err instanceof SyntaxError) {
       return { error: 'Failed to parse Gemini response.' };
     }

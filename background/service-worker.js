@@ -10,17 +10,22 @@ importScripts('background/transcript.js', 'background/gemini.js', 'background/ca
  */
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'GET_SUMMARY') {
-    handleGetSummary(message.videoId).then(sendResponse);
-    return true; // Keep message channel open for async response
+    handleGetSummary(message.videoId)
+      .then(sendResponse)
+      .catch(err => {
+        console.error('[GetPeek] Unhandled error:', err);
+        sendResponse({ error: 'Something went wrong. Please try again.' });
+      });
+    return true;
   }
 
   if (message.type === 'GET_STATS') {
-    getUsageStats().then(sendResponse);
+    getUsageStats().then(sendResponse).catch(() => sendResponse({}));
     return true;
   }
 
   if (message.type === 'CLEAR_CACHE') {
-    clearCache().then(count => sendResponse({ cleared: count }));
+    clearCache().then(count => sendResponse({ cleared: count })).catch(() => sendResponse({ cleared: 0 }));
     return true;
   }
 });
@@ -49,17 +54,21 @@ async function handleGetSummary(videoId) {
     }
 
     // 4. Fetch transcript
+    console.log('[GetPeek] Fetching transcript for:', videoId);
     const transcriptResult = await fetchTranscript(videoId);
+    console.log('[GetPeek] Transcript result:', transcriptResult.error || 'OK');
     if (transcriptResult.error) {
       return { error: transcriptResult.error };
     }
 
     // 5. Summarize with Gemini
+    console.log('[GetPeek] Sending to Gemini...');
     const summaryResult = await summarizeWithGemini(
       transcriptResult.transcript,
       settings.geminiApiKey,
       settings.model
     );
+    console.log('[GetPeek] Gemini result:', summaryResult.error || 'OK');
 
     if (summaryResult.error) {
       return { error: summaryResult.error };

@@ -9,9 +9,21 @@ const INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=fa
 const INNERTUBE_CONTEXT = {
   client: {
     clientName: 'WEB',
-    clientVersion: '2.20240101.00.00'
+    clientVersion: '2.20250606.01.00'
   }
 };
+
+const FETCH_TIMEOUT = 15000; // 15 seconds
+
+/**
+ * Create a fetch call with a timeout.
+ */
+function fetchWithTimeout(url, options = {}, timeout = FETCH_TIMEOUT) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
 
 /**
  * Fetch transcript text for a YouTube video.
@@ -21,7 +33,8 @@ const INNERTUBE_CONTEXT = {
 async function fetchTranscript(videoId) {
   try {
     // Step 1: Get caption track URLs from Innertube
-    const playerResponse = await fetch(INNERTUBE_URL, {
+    console.log('[GetPeek] Calling Innertube for video:', videoId);
+    const playerResponse = await fetchWithTimeout(INNERTUBE_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -31,13 +44,20 @@ async function fetchTranscript(videoId) {
     });
 
     if (!playerResponse.ok) {
+      console.error('[GetPeek] Innertube HTTP error:', playerResponse.status);
       if (playerResponse.status === 429) {
         return { error: 'YouTube rate limit reached. Try again in a moment.' };
       }
-      return { error: 'Failed to fetch video information.' };
+      return { error: `Failed to fetch video information (HTTP ${playerResponse.status}).` };
     }
 
     const playerData = await playerResponse.json();
+    console.log('[GetPeek] Innertube response received, playability:', playerData?.playabilityStatus?.status);
+
+    // Check playability
+    if (playerData?.playabilityStatus?.status === 'ERROR') {
+      return { error: 'Video is unavailable.' };
+    }
 
     // Check if video is a live stream
     if (playerData.videoDetails?.isLiveContent && playerData.videoDetails?.isLive) {
@@ -53,15 +73,19 @@ async function fetchTranscript(videoId) {
       return { error: 'No captions available for this video.' };
     }
 
+    console.log('[GetPeek] Found', captionTracks.length, 'caption tracks');
+
     // Step 2: Pick the best caption track
     const track = pickBestTrack(captionTracks);
     if (!track) {
       return { error: 'No suitable captions found.' };
     }
 
+    console.log('[GetPeek] Using caption track:', track.languageCode, track.kind || 'manual');
+
     // Step 3: Fetch the actual transcript
     const transcriptUrl = track.baseUrl + '&fmt=json3';
-    const transcriptResponse = await fetch(transcriptUrl);
+    const transcriptResponse = await fetchWithTimeout(transcriptUrl);
 
     if (!transcriptResponse.ok) {
       return { error: 'Failed to fetch video transcript.' };
@@ -76,6 +100,8 @@ async function fetchTranscript(videoId) {
       return { error: 'Transcript is too short or empty.' };
     }
 
+    console.log('[GetPeek] Transcript length:', text.length, 'chars');
+
     // Truncate very long transcripts (4+ hour videos)
     const MAX_CHARS = 100000;
     const truncated = text.length > MAX_CHARS;
@@ -88,6 +114,9 @@ async function fetchTranscript(videoId) {
     };
   } catch (err) {
     console.error('[GetPeek] Transcript fetch error:', err);
+    if (err.name === 'AbortError') {
+      return { error: 'Request timed out. Please try again.' };
+    }
     return { error: 'Failed to fetch transcript. Please try again.' };
   }
 }
