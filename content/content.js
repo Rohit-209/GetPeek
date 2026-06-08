@@ -1,8 +1,7 @@
 /**
  * GetPeek — Content Script (isolated world)
  * Detects hover on YouTube video thumbnails, extracts video ID,
- * requests transcript via page bridge (MAIN world), then sends
- * transcript to service worker for AI summarization.
+ * and asks the service worker for an AI summary.
  */
 
 // overlay.js is loaded before this file via manifest content_scripts
@@ -77,44 +76,13 @@ function onThumbnailLeave(event) {
   hideOverlay();
 }
 
-/**
- * Request transcript from page bridge, then summary from service worker.
- */
 async function requestSummary(videoId, anchorElement) {
   showOverlay(anchorElement, { loading: true, videoId });
 
   try {
-    // Step 1: Check if we already have a cached summary
-    const cached = await chrome.runtime.sendMessage({ type: 'CHECK_CACHE', videoId });
-    if (cached && cached.data) {
-      if (currentVideoId === videoId) {
-        updateOverlay({ data: cached.data, videoId });
-      }
-      return;
-    }
-
-    // Step 2: Fetch transcript via page bridge (MAIN world, has YouTube cookies)
-    const transcriptResult = await fetchTranscriptViaBridge(videoId);
-
-    if (currentVideoId !== videoId) return;
-
-    if (transcriptResult.error) {
-      updateOverlay({ error: transcriptResult.error, videoId });
-      return;
-    }
-
-    // Step 3: Send transcript to service worker for Gemini summarization
-    updateOverlay({ loading: true, videoId }); // still loading — now summarizing
-
     const response = await Promise.race([
-      chrome.runtime.sendMessage({
-        type: 'SUMMARIZE',
-        videoId,
-        transcript: transcriptResult.data.transcript,
-        language: transcriptResult.data.language,
-        truncated: transcriptResult.data.truncated
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 45000))
+      chrome.runtime.sendMessage({ type: 'SUMMARIZE', videoId }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 130000))
     ]);
 
     if (currentVideoId !== videoId) return;
@@ -126,7 +94,6 @@ async function requestSummary(videoId, anchorElement) {
     } else {
       updateOverlay({ data: response.data, videoId });
     }
-
   } catch (err) {
     if (currentVideoId === videoId) {
       const msg = err.message === 'timeout'
@@ -135,39 +102,6 @@ async function requestSummary(videoId, anchorElement) {
       updateOverlay({ error: msg, videoId });
     }
   }
-}
-
-/**
- * Fetch transcript via the page bridge (MAIN world script).
- * Uses CustomEvents to communicate across world boundaries.
- */
-function fetchTranscriptViaBridge(videoId) {
-  return new Promise((resolve) => {
-    const requestId = Math.random().toString(36).slice(2);
-    const timeout = setTimeout(() => {
-      window.removeEventListener('getpeek-transcript-result', handler);
-      resolve({ error: 'Transcript fetch timed out.' });
-    }, 20000);
-
-    function handler(event) {
-      if (event.detail && event.detail.requestId === requestId) {
-        clearTimeout(timeout);
-        window.removeEventListener('getpeek-transcript-result', handler);
-        if (event.detail.error) {
-          resolve({ error: event.detail.error });
-        } else {
-          resolve({ data: event.detail.data });
-        }
-      }
-    }
-
-    window.addEventListener('getpeek-transcript-result', handler);
-
-    // Dispatch request to the MAIN world page bridge
-    window.dispatchEvent(new CustomEvent('getpeek-fetch-transcript', {
-      detail: { videoId, requestId }
-    }));
-  });
 }
 
 /**

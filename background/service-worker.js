@@ -1,7 +1,6 @@
 /**
  * GetPeek — Background Service Worker
- * Handles Gemini API summarization and caching.
- * Transcript fetching is done by the page-bridge.js (MAIN world).
+ * Sends YouTube URLs to Gemini for video summarization, with caching.
  */
 
 console.log('[GetPeek] Service worker starting...');
@@ -96,10 +95,10 @@ async function clearCache() {
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
 const DEFAULT_MODEL = 'gemini-2.5-flash';
 
-const SUMMARY_PROMPT = `You are a YouTube video summarizer. Given a video transcript, produce a structured JSON response.
+const SUMMARY_PROMPT = `You are a YouTube video summarizer. Watch the provided video and produce a structured JSON response.
 
 Rules:
-- Summaries must be factual and based only on the transcript content
+- Summaries must be factual and based only on the video content
 - Each bullet should be one clear, complete sentence
 - Topics should be distinct (not overlapping)
 - Depth ratings reflect how thoroughly the video covers each topic
@@ -125,42 +124,52 @@ Respond with ONLY valid JSON in this exact format:
 
 Produce 3-5 summary bullets and 3-8 topics.`;
 
-async function summarizeWithGemini(transcript, apiKey, model) {
+async function summarizeWithGemini(videoId, apiKey, model) {
   const modelName = model || DEFAULT_MODEL;
   const url = `${GEMINI_BASE_URL}/${modelName}:generateContent?key=${apiKey}`;
-
-  const truncationNote = transcript.length >= 100000
-    ? '\n[TRANSCRIPT TRUNCATED — video is very long. Summarize based on available content.]'
-    : '';
+  const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   const body = {
     contents: [{
-      parts: [{
-        text: `${SUMMARY_PROMPT}\n\nTRANSCRIPT:\n${transcript}${truncationNote}`
-      }]
+      parts: [
+        { fileData: { fileUri: videoUrl } },
+        { text: SUMMARY_PROMPT }
+      ]
     }],
     generationConfig: {
       responseMimeType: 'application/json',
       temperature: 0.3,
-      maxOutputTokens: 1024
+      maxOutputTokens: 4096
     }
   };
 
   console.log('[GetPeek] Calling Gemini', modelName, '...');
-  const response = await fetchWithTimeout(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  }, 45000);
+  let response;
+  try {
+    response = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    }, 120000);
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('Video took too long to process. Try a shorter video.');
+    }
+    throw err;
+  }
 
   if (!response.ok) {
     const status = response.status;
-    console.error('[GetPeek] Gemini HTTP error:', status);
+    const errBody = await response.text().catch(() => '');
+    console.error('[GetPeek] Gemini HTTP error:', status, errBody.slice(0, 500));
     if (status === 401 || status === 403) {
       throw new Error('Invalid API key. Check your Gemini API key in GetPeek settings.');
     }
     if (status === 429) {
       throw new Error('Gemini rate limit reached. Try again later.');
+    }
+    if (status === 400) {
+      throw new Error('Gemini rejected this video. It may be private, restricted, or unsupported.');
     }
     throw new Error(`Gemini API error (${status}).`);
   }
@@ -172,7 +181,17 @@ async function summarizeWithGemini(transcript, apiKey, model) {
     throw new Error('Gemini returned an empty response.');
   }
 
-  const parsed = JSON.parse(text);
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    const finishReason = result?.candidates?.[0]?.finishReason;
+    console.error('[GetPeek] JSON parse failed. finishReason:', finishReason, 'tail:', text.slice(-200));
+    if (finishReason === 'MAX_TOKENS') {
+      throw new Error('Summary too long for token limit. Try again.');
+    }
+    throw new Error('Gemini returned malformed JSON.');
+  }
   if (!Array.isArray(parsed.summary) || !Array.isArray(parsed.topics)) {
     throw new Error('Gemini returned an unexpected format.');
   }
@@ -187,13 +206,6 @@ async function summarizeWithGemini(transcript, apiKey, model) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   console.log('[GetPeek] Message:', message.type);
-
-  if (message.type === 'CHECK_CACHE') {
-    getCachedSummary(message.videoId)
-      .then(data => sendResponse(data ? { data } : null))
-      .catch(() => sendResponse(null));
-    return true;
-  }
 
   if (message.type === 'SUMMARIZE') {
     handleSummarize(message)
@@ -216,8 +228,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function handleSummarize({ videoId, transcript, language, truncated }) {
-  // Check cache first
+async function handleSummarize({ videoId }) {
   const cached = await getCachedSummary(videoId);
   if (cached) {
     console.log('[GetPeek] Cache hit:', videoId);
@@ -234,18 +245,12 @@ async function handleSummarize({ videoId, transcript, language, truncated }) {
     return { error: 'Daily request limit reached. Summaries will resume tomorrow.' };
   }
 
-  console.log('[GetPeek] Summarizing', transcript.length, 'chars for', videoId);
+  console.log('[GetPeek] Summarizing video:', videoId);
 
-  const parsed = await summarizeWithGemini(transcript, settings.geminiApiKey, settings.model);
+  const parsed = await summarizeWithGemini(videoId, settings.geminiApiKey, settings.model);
 
-  const data = {
-    ...parsed,
-    language: language || 'en',
-    truncated: truncated || false
-  };
-
-  await setCachedSummary(videoId, data);
-  return { data };
+  await setCachedSummary(videoId, parsed);
+  return { data: parsed };
 }
 
 console.log('[GetPeek] Service worker ready.');
