@@ -8,15 +8,25 @@
 
 const HOVER_DELAY = 800;
 const HIDE_DELAY = 200;
+const STICKY_AFTER = 5000;
+const BG_ENROLL_AFTER = 10000;
+
 let hoverTimer = null;
 let hideTimer = null;
+let stickyTimer = null;
+let enrollTimer = null;
+
 let currentVideoId = null;
+let currentTitle = '';
+let isSticky = false;
+let isEnrolled = false;
 const inflight = new Map();
 
 function scheduleHide() {
+  if (isSticky) return;
   clearTimeout(hideTimer);
   hideTimer = setTimeout(() => {
-    currentVideoId = null;
+    resetHoverState();
     hideOverlay();
   }, HIDE_DELAY);
 }
@@ -25,9 +35,21 @@ function cancelHide() {
   clearTimeout(hideTimer);
 }
 
-/**
- * Extract video ID from a YouTube link element.
- */
+function resetHoverState() {
+  currentVideoId = null;
+  currentTitle = '';
+  isSticky = false;
+  isEnrolled = false;
+  clearTimeout(stickyTimer);
+  clearTimeout(enrollTimer);
+}
+
+function dismissCardImmediate() {
+  cancelHide();
+  resetHoverState();
+  hideOverlay();
+}
+
 function extractVideoId(element) {
   const anchor = element.closest('a[href]') || element.querySelector('a[href]');
   if (!anchor) return null;
@@ -44,17 +66,31 @@ function extractVideoId(element) {
   return null;
 }
 
-/**
- * Find the thumbnail container element from any child element.
- */
+function extractTitle(container) {
+  const titleEl =
+    container.querySelector('#video-title') ||
+    container.querySelector('a#video-title-link') ||
+    container.querySelector('h3 a');
+  if (titleEl) {
+    const t = (titleEl.getAttribute('title') || titleEl.textContent || '').trim();
+    if (t) return t;
+  }
+  const anchor = container.querySelector('a#video-title-link, a#thumbnail, a[href*="/watch?v="]');
+  if (anchor) {
+    const t = (anchor.getAttribute('title') || anchor.getAttribute('aria-label') || '').trim();
+    if (t) return t;
+  }
+  return '';
+}
+
 function findThumbnailContainer(target) {
   const selectors = [
-    'ytd-thumbnail',
-    'ytd-playlist-thumbnail',
+    'ytd-rich-item-renderer',
     'ytd-rich-grid-media',
     'ytd-compact-video-renderer',
     'ytd-video-renderer',
-    'ytd-rich-item-renderer'
+    'ytd-playlist-thumbnail',
+    'ytd-thumbnail'
   ];
 
   for (const sel of selectors) {
@@ -80,6 +116,20 @@ function onThumbnailEnter(event) {
 
   hoverTimer = setTimeout(() => {
     currentVideoId = videoId;
+    currentTitle = extractTitle(container);
+    isSticky = false;
+    isEnrolled = false;
+    clearTimeout(stickyTimer);
+    clearTimeout(enrollTimer);
+
+    stickyTimer = setTimeout(() => {
+      if (currentVideoId === videoId) isSticky = true;
+    }, STICKY_AFTER);
+
+    enrollTimer = setTimeout(() => {
+      if (currentVideoId === videoId) enrollInBackground(videoId, currentTitle);
+    }, BG_ENROLL_AFTER);
+
     requestSummary(videoId, container);
   }, HOVER_DELAY);
 }
@@ -95,14 +145,27 @@ function onThumbnailLeave(event) {
   scheduleHide();
 }
 
+function enrollInBackground(videoId, title) {
+  if (isEnrolled) return;
+  isEnrolled = true;
+  chrome.runtime.sendMessage({ type: 'ENROLL_HISTORY', videoId, title }).catch(() => {});
+  showBackgroundIndicator();
+}
+
+function handleBackgroundButtonClick() {
+  if (!currentVideoId) return;
+  enrollInBackground(currentVideoId, currentTitle);
+  dismissCardImmediate();
+}
+
 async function requestSummary(videoId, anchorElement) {
-  showOverlay(anchorElement, { loading: true, videoId });
+  showOverlay(anchorElement, { loading: true, videoId, showBgButton: true });
 
   try {
     let pending = inflight.get(videoId);
     if (!pending) {
       pending = Promise.race([
-        chrome.runtime.sendMessage({ type: 'SUMMARIZE', videoId }),
+        chrome.runtime.sendMessage({ type: 'SUMMARIZE', videoId, title: currentTitle }),
         new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 130000))
       ]).finally(() => inflight.delete(videoId));
       inflight.set(videoId, pending);
@@ -116,7 +179,7 @@ async function requestSummary(videoId, anchorElement) {
     } else if (response.error) {
       updateOverlay({ error: response.error, videoId });
     } else {
-      updateOverlay({ data: response.data, videoId });
+      updateOverlay({ data: response.data, videoId, showBgButton: false });
     }
   } catch (err) {
     if (currentVideoId === videoId) {
@@ -128,9 +191,6 @@ async function requestSummary(videoId, anchorElement) {
   }
 }
 
-/**
- * Initialize.
- */
 function init() {
   createOverlay();
   document.addEventListener('mouseover', onThumbnailEnter, true);
@@ -138,8 +198,8 @@ function init() {
 
   window.addEventListener('yt-navigate-finish', () => {
     cancelHide();
+    resetHoverState();
     hideOverlay();
-    currentVideoId = null;
     clearTimeout(hoverTimer);
   });
 

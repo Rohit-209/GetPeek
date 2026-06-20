@@ -32,7 +32,42 @@ function createOverlay() {
   cardEl.style.display = 'none';
   cardEl.addEventListener('mouseenter', () => cancelHide());
   cardEl.addEventListener('mouseleave', () => scheduleHide());
+  cardEl.addEventListener('click', (e) => {
+    if (!e.target.closest) return;
+    const bgBtn = e.target.closest('.getpeek-bg-btn');
+    if (bgBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      handleBackgroundButtonClick();
+      return;
+    }
+    const closeBtn = e.target.closest('.getpeek-close-btn');
+    if (closeBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      dismissCardImmediate();
+    }
+  });
   shadowRoot.appendChild(cardEl);
+}
+
+/**
+ * Show the "saved to side panel" indicator without re-rendering the card.
+ */
+function showBackgroundIndicator() {
+  if (!cardEl) return;
+  if (cardEl.querySelector('.getpeek-bg-indicator')) return;
+  const indicator = document.createElement('div');
+  indicator.className = 'getpeek-bg-indicator';
+  indicator.innerHTML = `<span>✓</span><span>Saved to side panel — keep browsing</span>`;
+  const header = cardEl.querySelector('.getpeek-header');
+  if (header && header.nextSibling) {
+    cardEl.insertBefore(indicator, header.nextSibling);
+  } else {
+    cardEl.appendChild(indicator);
+  }
+  const bgBtn = cardEl.querySelector('.getpeek-bg-btn');
+  if (bgBtn) bgBtn.remove();
 }
 
 /**
@@ -91,11 +126,22 @@ function hideOverlay() {
  * Render card content based on state.
  */
 function renderCard(state) {
+  let actionHtml = '';
+  if (state.showBgButton) {
+    actionHtml = `<button class="getpeek-bg-btn" title="Generate in background and add to side panel">↗ Background</button>`;
+  } else if (state.data || state.error) {
+    actionHtml = `<button class="getpeek-close-btn" title="Close">×</button>`;
+  }
+  const headerHtml = `
+    <div class="getpeek-header">
+      <span class="getpeek-logo">👁 GetPeek</span>
+      ${actionHtml}
+    </div>
+  `;
+
   if (state.loading) {
     cardEl.innerHTML = `
-      <div class="getpeek-header">
-        <span class="getpeek-logo">👁 GetPeek</span>
-      </div>
+      ${headerHtml}
       <div class="getpeek-loading">
         <div class="getpeek-spinner"></div>
         <span>Summarizing video...</span>
@@ -106,9 +152,7 @@ function renderCard(state) {
 
   if (state.error) {
     cardEl.innerHTML = `
-      <div class="getpeek-header">
-        <span class="getpeek-logo">👁 GetPeek</span>
-      </div>
+      ${headerHtml}
       <div class="getpeek-error">
         <span class="getpeek-error-icon">⚠</span>
         <span>${escapeHtml(state.error)}</span>
@@ -141,9 +185,7 @@ function renderCard(state) {
     .join('');
 
   cardEl.innerHTML = `
-    <div class="getpeek-header">
-      <span class="getpeek-logo">👁 GetPeek</span>
-    </div>
+    ${headerHtml}
 
     <div class="getpeek-section">
       <h3 class="getpeek-section-title">Summary</h3>
@@ -209,6 +251,59 @@ function getCardStyles() {
       font-weight: 700;
       color: #a78bfa;
       letter-spacing: 0.5px;
+    }
+
+    .getpeek-bg-btn {
+      background: transparent;
+      border: 1px solid rgba(167, 139, 250, 0.35);
+      color: #a78bfa;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, border-color 0.15s;
+    }
+
+    .getpeek-bg-btn:hover {
+      background: rgba(124, 58, 237, 0.15);
+      border-color: rgba(167, 139, 250, 0.6);
+    }
+
+    .getpeek-close-btn {
+      background: transparent;
+      border: none;
+      color: #9ca3af;
+      font-size: 18px;
+      line-height: 1;
+      padding: 2px 8px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    .getpeek-close-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #e5e7eb;
+    }
+
+    .getpeek-bg-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(34, 197, 94, 0.08);
+      border: 1px solid rgba(34, 197, 94, 0.2);
+      border-radius: 6px;
+      padding: 6px 10px;
+      margin-bottom: 10px;
+      font-size: 11px;
+      color: #86efac;
+    }
+
+    .getpeek-bg-indicator span:first-child {
+      color: #4ade80;
+      font-weight: 700;
     }
 
     .getpeek-loading {
@@ -378,6 +473,25 @@ function getCardStyles() {
 
       .getpeek-loading {
         color: #6b7280;
+      }
+
+      .getpeek-bg-btn {
+        border-color: rgba(124, 58, 237, 0.3);
+        color: #7c3aed;
+      }
+
+      .getpeek-bg-btn:hover {
+        background: rgba(124, 58, 237, 0.08);
+      }
+
+      .getpeek-bg-indicator {
+        background: rgba(34, 197, 94, 0.06);
+        border-color: rgba(34, 197, 94, 0.2);
+        color: #15803d;
+      }
+
+      .getpeek-bg-indicator span:first-child {
+        color: #16a34a;
       }
     }
   `;

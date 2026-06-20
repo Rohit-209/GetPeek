@@ -5,6 +5,10 @@
 
 console.log('[GetPeek] Service worker starting...');
 
+chrome.sidePanel
+  ?.setPanelBehavior({ openPanelOnActionClick: true })
+  .catch(err => console.warn('[GetPeek] sidePanel.setPanelBehavior failed:', err));
+
 // ============================================================
 // UTILITIES
 // ============================================================
@@ -86,6 +90,74 @@ async function clearCache() {
     await chrome.storage.local.remove(cacheKeys);
   }
   return cacheKeys.length;
+}
+
+// ============================================================
+// SIDE PANEL HISTORY + BADGE
+// ============================================================
+
+const HISTORY_LIMIT = 50;
+let unseenCount = 0;
+const enrolled = new Map();
+
+async function getHistory() {
+  const { history } = await chrome.storage.local.get('history');
+  return Array.isArray(history) ? history : [];
+}
+
+async function upsertHistory(entry) {
+  const history = await getHistory();
+  const idx = history.findIndex(h => h.videoId === entry.videoId);
+  if (idx >= 0) {
+    history[idx] = { ...history[idx], ...entry };
+  } else {
+    history.unshift(entry);
+  }
+  while (history.length > HISTORY_LIMIT) history.pop();
+  await chrome.storage.local.set({ history });
+  broadcastHistory(history);
+  return history;
+}
+
+function broadcastHistory(history) {
+  chrome.runtime.sendMessage({ type: 'HISTORY_UPDATED', history }).catch(() => {});
+}
+
+async function markCompleted(videoId, data, title) {
+  await upsertHistory({
+    videoId,
+    title,
+    status: 'done',
+    data,
+    completedAt: Date.now()
+  });
+  unseenCount++;
+  chrome.action.setBadgeText({ text: String(unseenCount) }).catch(() => {});
+  chrome.action.setBadgeBackgroundColor({ color: '#7c3aed' }).catch(() => {});
+}
+
+async function markError(videoId, error, title) {
+  await upsertHistory({
+    videoId,
+    title,
+    status: 'error',
+    error,
+    completedAt: Date.now()
+  });
+}
+
+async function markLoading(videoId, title) {
+  await upsertHistory({
+    videoId,
+    title,
+    status: 'loading',
+    startedAt: Date.now()
+  });
+}
+
+function resetBadge() {
+  unseenCount = 0;
+  chrome.action.setBadgeText({ text: '' }).catch(() => {});
 }
 
 // ============================================================
@@ -222,6 +294,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'ENROLL_HISTORY') {
+    enrolled.set(message.videoId, message.title || '');
+    markLoading(message.videoId, message.title).then(() => sendResponse({ ok: true }));
+    return true;
+  }
+
+  if (message.type === 'GET_HISTORY') {
+    getHistory().then(sendResponse);
+    return true;
+  }
+
+  if (message.type === 'RESET_BADGE') {
+    resetBadge();
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (message.type === 'GET_STATS') {
     getUsageStats().then(sendResponse).catch(() => sendResponse({}));
     return true;
@@ -233,10 +322,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function handleSummarize({ videoId }) {
+async function handleSummarize({ videoId, title }) {
+  const recordWith = (data, errMsg) => {
+    if (!enrolled.has(videoId)) return Promise.resolve();
+    const t = enrolled.get(videoId) || title;
+    enrolled.delete(videoId);
+    return errMsg ? markError(videoId, errMsg, t) : markCompleted(videoId, data, t);
+  };
+
   const cached = await getCachedSummary(videoId);
   if (cached) {
     console.log('[GetPeek] Cache hit:', videoId);
+    await recordWith(cached, null);
     return { data: cached };
   }
 
@@ -252,10 +349,15 @@ async function handleSummarize({ videoId }) {
 
   console.log('[GetPeek] Summarizing video:', videoId);
 
-  const parsed = await summarizeWithGemini(videoId, settings.geminiApiKey, settings.model);
-
-  await setCachedSummary(videoId, parsed);
-  return { data: parsed };
+  try {
+    const parsed = await summarizeWithGemini(videoId, settings.geminiApiKey, settings.model);
+    await setCachedSummary(videoId, parsed);
+    await recordWith(parsed, null);
+    return { data: parsed };
+  } catch (err) {
+    await recordWith(null, err.message || 'Failed.');
+    throw err;
+  }
 }
 
 console.log('[GetPeek] Service worker ready.');
