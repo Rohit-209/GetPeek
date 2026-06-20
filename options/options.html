@@ -34,6 +34,16 @@
         </select>
       </div>
 
+      <div class="field">
+        <label for="panelMode">Open briefs in</label>
+        <select id="panelMode">
+          <option value="sidepanel">Native side panel (Chrome, Edge, Brave)</option>
+          <option value="popup">Floating window (recommended for Arc)</option>
+          <option value="tab">New tab</option>
+        </select>
+        <p class="hint">Arc and some Chromium variants don't render the native side panel — switch to a floating window if clicking the icon does nothing.</p>
+      </div>
+
       <button id="saveBtn" class="btn-primary">Save Settings</button>
       <span id="saveStatus" class="status"></span>
     </section>

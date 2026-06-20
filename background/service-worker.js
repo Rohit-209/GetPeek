@@ -5,7 +5,37 @@
 
 console.log('[GetPeek] Service worker starting...');
 
+async function getPanelMode() {
+  const { settings } = await chrome.storage.local.get('settings');
+  return (settings && settings.panelMode) || 'sidepanel';
+}
+
+function openPanelAsPopup() {
+  return chrome.windows.create({
+    url: chrome.runtime.getURL('sidepanel/sidepanel.html'),
+    type: 'popup',
+    width: 440,
+    height: 720
+  });
+}
+
+function openPanelAsTab() {
+  return chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel/sidepanel.html') });
+}
+
 chrome.action.onClicked.addListener(async (tab) => {
+  const mode = await getPanelMode();
+
+  if (mode === 'popup') {
+    openPanelAsPopup().catch(err => console.warn('[GetPeek] popup open failed:', err));
+    return;
+  }
+
+  if (mode === 'tab') {
+    openPanelAsTab().catch(err => console.warn('[GetPeek] tab open failed:', err));
+    return;
+  }
+
   try {
     if (chrome.sidePanel && typeof chrome.sidePanel.open === 'function') {
       await chrome.sidePanel.open({ windowId: tab.windowId });
@@ -13,8 +43,8 @@ chrome.action.onClicked.addListener(async (tab) => {
     }
     throw new Error('sidePanel API unavailable');
   } catch (err) {
-    console.warn('[GetPeek] sidePanel.open failed, opening in tab:', err);
-    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel/sidepanel.html') });
+    console.warn('[GetPeek] sidePanel.open failed, falling back to popup:', err);
+    openPanelAsPopup().catch(() => openPanelAsTab());
   }
 });
 

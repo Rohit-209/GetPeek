@@ -5,6 +5,7 @@
 const apiKeyInput = document.getElementById('apiKey');
 const toggleKeyBtn = document.getElementById('toggleKey');
 const modelSelect = document.getElementById('model');
+const panelModeSelect = document.getElementById('panelMode');
 const saveBtn = document.getElementById('saveBtn');
 const saveStatus = document.getElementById('saveStatus');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
@@ -28,6 +29,7 @@ async function loadSettings() {
   if (settings.model) {
     modelSelect.value = settings.model;
   }
+  panelModeSelect.value = settings.panelMode || 'sidepanel';
 
   // Reset counter if new day
   const today = new Date().toISOString().slice(0, 10);
@@ -56,7 +58,8 @@ toggleKeyBtn.addEventListener('click', () => {
 saveBtn.addEventListener('click', async () => {
   const settings = {
     geminiApiKey: apiKeyInput.value.trim(),
-    model: modelSelect.value
+    model: modelSelect.value,
+    panelMode: panelModeSelect.value
   };
 
   await chrome.storage.local.set({ settings });
