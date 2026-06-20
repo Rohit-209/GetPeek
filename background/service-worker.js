@@ -139,7 +139,8 @@ async function summarizeWithGemini(videoId, apiKey, model) {
     generationConfig: {
       responseMimeType: 'application/json',
       temperature: 0.3,
-      maxOutputTokens: 4096
+      maxOutputTokens: 4096,
+      thinkingConfig: { thinkingBudget: 0 }
     }
   };
 
