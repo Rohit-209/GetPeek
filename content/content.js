@@ -9,6 +9,7 @@
 const HOVER_DELAY = 800;
 let hoverTimer = null;
 let currentVideoId = null;
+const inflight = new Map();
 
 /**
  * Extract video ID from a YouTube link element.
@@ -80,10 +81,15 @@ async function requestSummary(videoId, anchorElement) {
   showOverlay(anchorElement, { loading: true, videoId });
 
   try {
-    const response = await Promise.race([
-      chrome.runtime.sendMessage({ type: 'SUMMARIZE', videoId }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 130000))
-    ]);
+    let pending = inflight.get(videoId);
+    if (!pending) {
+      pending = Promise.race([
+        chrome.runtime.sendMessage({ type: 'SUMMARIZE', videoId }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 130000))
+      ]).finally(() => inflight.delete(videoId));
+      inflight.set(videoId, pending);
+    }
+    const response = await pending;
 
     if (currentVideoId !== videoId) return;
 
