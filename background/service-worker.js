@@ -10,43 +10,74 @@ async function getPanelMode() {
   return (settings && settings.panelMode) || 'sidepanel';
 }
 
-function openPanelAsPopup() {
-  return chrome.windows.create({
+async function openPanelAsPopup() {
+  console.log('[GetPeek] Opening panel as popup window');
+  const win = await chrome.windows.create({
     url: chrome.runtime.getURL('sidepanel/sidepanel.html'),
     type: 'popup',
     width: 440,
-    height: 720
+    height: 720,
+    focused: true
   });
+  console.log('[GetPeek] Popup window created:', win?.id);
+  return win;
 }
 
-function openPanelAsTab() {
+async function openPanelAsTab() {
+  console.log('[GetPeek] Opening panel as tab');
   return chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel/sidepanel.html') });
 }
 
-chrome.action.onClicked.addListener(async (tab) => {
+async function openPanel(tab) {
   const mode = await getPanelMode();
+  console.log('[GetPeek] Open panel requested, mode =', mode);
 
   if (mode === 'popup') {
-    openPanelAsPopup().catch(err => console.warn('[GetPeek] popup open failed:', err));
-    return;
+    return openPanelAsPopup().catch(err => {
+      console.warn('[GetPeek] popup failed, falling back to tab:', err);
+      return openPanelAsTab();
+    });
   }
 
   if (mode === 'tab') {
-    openPanelAsTab().catch(err => console.warn('[GetPeek] tab open failed:', err));
-    return;
+    return openPanelAsTab().catch(err => console.warn('[GetPeek] tab open failed:', err));
   }
 
   try {
     if (chrome.sidePanel && typeof chrome.sidePanel.open === 'function') {
-      await chrome.sidePanel.open({ windowId: tab.windowId });
+      await chrome.sidePanel.open({ windowId: tab?.windowId });
+      console.log('[GetPeek] sidePanel.open resolved');
       return;
     }
     throw new Error('sidePanel API unavailable');
   } catch (err) {
     console.warn('[GetPeek] sidePanel.open failed, falling back to popup:', err);
-    openPanelAsPopup().catch(() => openPanelAsTab());
+    return openPanelAsPopup().catch(() => openPanelAsTab());
+  }
+}
+
+chrome.action.onClicked.addListener((tab) => {
+  console.log('[GetPeek] action.onClicked fired');
+  openPanel(tab);
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  try {
+    chrome.contextMenus.create({
+      id: 'getpeek-open-panel',
+      title: 'Open GetPeek panel',
+      contexts: ['action']
+    });
+  } catch (err) {
+    console.warn('[GetPeek] contextMenus.create failed:', err);
   }
 });
+
+if (chrome.contextMenus) {
+  chrome.contextMenus.onClicked.addListener((info, tab) => {
+    if (info.menuItemId === 'getpeek-open-panel') openPanel(tab);
+  });
+}
 
 // ============================================================
 // UTILITIES

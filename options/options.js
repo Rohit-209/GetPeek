@@ -7,6 +7,7 @@ const toggleKeyBtn = document.getElementById('toggleKey');
 const modelSelect = document.getElementById('model');
 const panelModeSelect = document.getElementById('panelMode');
 const saveBtn = document.getElementById('saveBtn');
+const openPanelBtn = document.getElementById('openPanelBtn');
 const saveStatus = document.getElementById('saveStatus');
 const clearCacheBtn = document.getElementById('clearCacheBtn');
 const cacheStatus = document.getElementById('cacheStatus');
@@ -70,6 +71,26 @@ saveBtn.addEventListener('click', async () => {
     saveStatus.textContent = '';
     saveStatus.className = 'status';
   }, 2000);
+});
+
+// Open panel from options (Arc workaround)
+openPanelBtn.addEventListener('click', async () => {
+  const mode = panelModeSelect.value;
+  if (mode === 'tab') {
+    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel/sidepanel.html') });
+    return;
+  }
+  try {
+    await chrome.windows.create({
+      url: chrome.runtime.getURL('sidepanel/sidepanel.html'),
+      type: 'popup',
+      width: 440,
+      height: 720,
+      focused: true
+    });
+  } catch (err) {
+    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel/sidepanel.html') });
+  }
 });
 
 // Clear cache

@@ -3,7 +3,7 @@
   "name": "GetPeek",
   "version": "1.0.0",
   "description": "Summarize YouTube videos on hover — get the gist before you watch",
-  "permissions": ["storage", "sidePanel"],
+  "permissions": ["storage", "sidePanel", "contextMenus"],
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://generativelanguage.googleapis.com/*"
