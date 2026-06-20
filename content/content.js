@@ -8,22 +8,20 @@
 
 const HOVER_DELAY = 800;
 const HIDE_DELAY = 200;
-const STICKY_AFTER = 5000;
 const BG_ENROLL_AFTER = 10000;
 
 let hoverTimer = null;
 let hideTimer = null;
-let stickyTimer = null;
 let enrollTimer = null;
 
 let currentVideoId = null;
 let currentTitle = '';
-let isSticky = false;
+let isPinned = false;
 let isEnrolled = false;
 const inflight = new Map();
 
 function scheduleHide() {
-  if (isSticky) return;
+  if (isPinned) return;
   clearTimeout(hideTimer);
   hideTimer = setTimeout(() => {
     resetHoverState();
@@ -38,10 +36,15 @@ function cancelHide() {
 function resetHoverState() {
   currentVideoId = null;
   currentTitle = '';
-  isSticky = false;
+  isPinned = false;
   isEnrolled = false;
-  clearTimeout(stickyTimer);
   clearTimeout(enrollTimer);
+}
+
+function togglePin() {
+  isPinned = !isPinned;
+  updatePinButton(isPinned);
+  if (!isPinned) scheduleHide();
 }
 
 function dismissCardImmediate() {
@@ -117,14 +120,9 @@ function onThumbnailEnter(event) {
   hoverTimer = setTimeout(() => {
     currentVideoId = videoId;
     currentTitle = extractTitle(container);
-    isSticky = false;
+    isPinned = false;
     isEnrolled = false;
-    clearTimeout(stickyTimer);
     clearTimeout(enrollTimer);
-
-    stickyTimer = setTimeout(() => {
-      if (currentVideoId === videoId) isSticky = true;
-    }, STICKY_AFTER);
 
     enrollTimer = setTimeout(() => {
       if (currentVideoId === videoId) enrollInBackground(videoId, currentTitle);

@@ -5,9 +5,18 @@
 
 console.log('[GetPeek] Service worker starting...');
 
-chrome.sidePanel
-  ?.setPanelBehavior({ openPanelOnActionClick: true })
-  .catch(err => console.warn('[GetPeek] sidePanel.setPanelBehavior failed:', err));
+chrome.action.onClicked.addListener(async (tab) => {
+  try {
+    if (chrome.sidePanel && typeof chrome.sidePanel.open === 'function') {
+      await chrome.sidePanel.open({ windowId: tab.windowId });
+      return;
+    }
+    throw new Error('sidePanel API unavailable');
+  } catch (err) {
+    console.warn('[GetPeek] sidePanel.open failed, opening in tab:', err);
+    chrome.tabs.create({ url: chrome.runtime.getURL('sidepanel/sidepanel.html') });
+  }
+});
 
 // ============================================================
 // UTILITIES

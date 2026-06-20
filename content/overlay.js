@@ -34,6 +34,13 @@ function createOverlay() {
   cardEl.addEventListener('mouseleave', () => scheduleHide());
   cardEl.addEventListener('click', (e) => {
     if (!e.target.closest) return;
+    const pinBtn = e.target.closest('.getpeek-pin-btn');
+    if (pinBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      togglePin();
+      return;
+    }
     const bgBtn = e.target.closest('.getpeek-bg-btn');
     if (bgBtn) {
       e.preventDefault();
@@ -49,6 +56,17 @@ function createOverlay() {
     }
   });
   shadowRoot.appendChild(cardEl);
+}
+
+/**
+ * Sync the pin button's visual state without re-rendering the card.
+ */
+function updatePinButton(pinned) {
+  if (!cardEl) return;
+  const btn = cardEl.querySelector('.getpeek-pin-btn');
+  if (!btn) return;
+  btn.classList.toggle('getpeek-pin-active', pinned);
+  btn.title = pinned ? 'Unpin' : 'Pin card';
 }
 
 /**
@@ -126,16 +144,21 @@ function hideOverlay() {
  * Render card content based on state.
  */
 function renderCard(state) {
-  let actionHtml = '';
-  if (state.showBgButton) {
-    actionHtml = `<button class="getpeek-bg-btn" title="Generate in background and add to side panel">↗ Background</button>`;
-  } else if (state.data || state.error) {
-    actionHtml = `<button class="getpeek-close-btn" title="Close">×</button>`;
-  }
+  const pinClass = state.pinned ? 'getpeek-pin-btn getpeek-pin-active' : 'getpeek-pin-btn';
+  const pinTitle = state.pinned ? 'Unpin' : 'Pin card';
+  const pinHtml = `<button class="${pinClass}" title="${pinTitle}">📌</button>`;
+  const closeHtml = `<button class="getpeek-close-btn" title="Close">×</button>`;
+  const bgHtml = state.showBgButton
+    ? `<button class="getpeek-bg-btn" title="Generate in background and add to side panel">↗ Background</button>`
+    : '';
   const headerHtml = `
     <div class="getpeek-header">
       <span class="getpeek-logo">👁 GetPeek</span>
-      ${actionHtml}
+      <div class="getpeek-actions">
+        ${bgHtml}
+        ${pinHtml}
+        ${closeHtml}
+      </div>
     </div>
   `;
 
@@ -253,6 +276,12 @@ function getCardStyles() {
       letter-spacing: 0.5px;
     }
 
+    .getpeek-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
     .getpeek-bg-btn {
       background: transparent;
       border: 1px solid rgba(167, 139, 250, 0.35);
@@ -269,6 +298,31 @@ function getCardStyles() {
     .getpeek-bg-btn:hover {
       background: rgba(124, 58, 237, 0.15);
       border-color: rgba(167, 139, 250, 0.6);
+    }
+
+    .getpeek-pin-btn {
+      background: transparent;
+      border: 1px solid transparent;
+      color: #9ca3af;
+      font-size: 13px;
+      line-height: 1;
+      padding: 4px 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-family: inherit;
+      filter: grayscale(1) opacity(0.7);
+      transition: filter 0.15s, background 0.15s, border-color 0.15s;
+    }
+
+    .getpeek-pin-btn:hover {
+      background: rgba(255, 255, 255, 0.06);
+      filter: grayscale(0) opacity(1);
+    }
+
+    .getpeek-pin-active {
+      background: rgba(124, 58, 237, 0.2);
+      border-color: rgba(167, 139, 250, 0.5);
+      filter: grayscale(0) opacity(1);
     }
 
     .getpeek-close-btn {
