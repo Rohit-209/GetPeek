@@ -93,7 +93,7 @@ async function clearCache() {
 // ============================================================
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_MODEL = 'gemini-2.5-flash-lite';
 
 const SUMMARY_PROMPT = `You are a YouTube video summarizer. Watch the provided video and produce a structured JSON response.
 
@@ -132,7 +132,10 @@ async function summarizeWithGemini(videoId, apiKey, model) {
   const body = {
     contents: [{
       parts: [
-        { fileData: { fileUri: videoUrl } },
+        {
+          fileData: { fileUri: videoUrl },
+          videoMetadata: { fps: 0.5 }
+        },
         { text: SUMMARY_PROMPT }
       ]
     }],
@@ -140,6 +143,7 @@ async function summarizeWithGemini(videoId, apiKey, model) {
       responseMimeType: 'application/json',
       temperature: 0.3,
       maxOutputTokens: 4096,
+      mediaResolution: 'MEDIA_RESOLUTION_LOW',
       thinkingConfig: { thinkingBudget: 0 }
     }
   };
