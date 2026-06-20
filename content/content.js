@@ -7,9 +7,23 @@
 // overlay.js is loaded before this file via manifest content_scripts
 
 const HOVER_DELAY = 800;
+const HIDE_DELAY = 200;
 let hoverTimer = null;
+let hideTimer = null;
 let currentVideoId = null;
 const inflight = new Map();
+
+function scheduleHide() {
+  clearTimeout(hideTimer);
+  hideTimer = setTimeout(() => {
+    currentVideoId = null;
+    hideOverlay();
+  }, HIDE_DELAY);
+}
+
+function cancelHide() {
+  clearTimeout(hideTimer);
+}
 
 /**
  * Extract video ID from a YouTube link element.
@@ -55,7 +69,12 @@ function onThumbnailEnter(event) {
   if (!container) return;
 
   const videoId = extractVideoId(container);
-  if (!videoId || videoId === currentVideoId) return;
+  if (!videoId) return;
+
+  if (videoId === currentVideoId) {
+    cancelHide();
+    return;
+  }
 
   clearTimeout(hoverTimer);
 
@@ -73,8 +92,7 @@ function onThumbnailLeave(event) {
   if (related && container.contains(related)) return;
 
   clearTimeout(hoverTimer);
-  currentVideoId = null;
-  hideOverlay();
+  scheduleHide();
 }
 
 async function requestSummary(videoId, anchorElement) {
@@ -119,6 +137,7 @@ function init() {
   document.addEventListener('mouseout', onThumbnailLeave, true);
 
   window.addEventListener('yt-navigate-finish', () => {
+    cancelHide();
     hideOverlay();
     currentVideoId = null;
     clearTimeout(hoverTimer);

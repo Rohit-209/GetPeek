@@ -30,6 +30,8 @@ function createOverlay() {
   cardEl = document.createElement('div');
   cardEl.className = 'getpeek-card';
   cardEl.style.display = 'none';
+  cardEl.addEventListener('mouseenter', () => cancelHide());
+  cardEl.addEventListener('mouseleave', () => scheduleHide());
   shadowRoot.appendChild(cardEl);
 }
 
