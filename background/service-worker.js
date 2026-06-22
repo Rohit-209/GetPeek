@@ -12,14 +12,31 @@ async function getPanelMode() {
 
 async function openPanelAsPopup() {
   console.log('[GetPeek] Opening panel as popup window');
+  const REQ_WIDTH = 440;
+  const REQ_HEIGHT = 720;
   const win = await chrome.windows.create({
     url: chrome.runtime.getURL('sidepanel/sidepanel.html'),
     type: 'popup',
-    width: 440,
-    height: 720,
+    state: 'normal',
+    width: REQ_WIDTH,
+    height: REQ_HEIGHT,
+    top: 80,
+    left: 100,
     focused: true
   });
-  console.log('[GetPeek] Popup window created:', win?.id);
+  console.log('[GetPeek] Popup window created:', win?.id, win?.width + 'x' + win?.height, 'state=' + win?.state);
+  // Arc ignores type:'popup' + sizing and opens a full window. Detect that and
+  // fall back to a tab in the current window (Arc handles tabs cleanly).
+  const ignoredSizing = win && (
+    win.state === 'fullscreen' ||
+    win.state === 'maximized' ||
+    (typeof win.width === 'number' && win.width > REQ_WIDTH * 1.5)
+  );
+  if (ignoredSizing) {
+    console.warn('[GetPeek] Browser ignored popup sizing — falling back to tab');
+    chrome.windows.remove(win.id).catch(err => console.warn('[GetPeek] could not close oversized popup:', err));
+    return openPanelAsTab();
+  }
   return win;
 }
 
@@ -54,6 +71,18 @@ async function openPanel(tab) {
     console.warn('[GetPeek] sidePanel.open failed, falling back to popup:', err);
     return openPanelAsPopup().catch(() => openPanelAsTab());
   }
+}
+
+// Disable Chrome's default "auto-open side panel on action click" so that
+// chrome.action.onClicked always fires and our handler decides what to do.
+// Without this, Arc swallows the click trying to open the manifest-declared
+// side panel — but never actually renders any UI.
+try {
+  chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: false })
+    .then(() => console.log('[GetPeek] setPanelBehavior(false) ok'))
+    .catch(err => console.warn('[GetPeek] setPanelBehavior failed:', err));
+} catch (err) {
+  console.warn('[GetPeek] setPanelBehavior threw:', err);
 }
 
 chrome.action.onClicked.addListener((tab) => {
@@ -291,18 +320,29 @@ async function summarizeWithGemini(videoId, apiKey, model) {
   };
 
   console.log('[GetPeek] Calling Gemini', modelName, '...');
+  const RETRY_DELAYS_MS = [1000, 3000];
   let response;
-  try {
-    response = await fetchWithTimeout(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }, 120000);
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      throw new Error('Video took too long to process. Try a shorter video.');
+  for (let attempt = 0; ; attempt++) {
+    try {
+      response = await fetchWithTimeout(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }, 120000);
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        throw new Error('Video took too long to process. Try a shorter video.');
+      }
+      throw err;
     }
-    throw err;
+    if (response.ok) break;
+    // Retry transient server errors (overloaded / unavailable / gateway).
+    if ([500, 502, 503, 504].includes(response.status) && attempt < RETRY_DELAYS_MS.length) {
+      console.warn('[GetPeek] Gemini', response.status, '— retrying in', RETRY_DELAYS_MS[attempt], 'ms');
+      await new Promise(r => setTimeout(r, RETRY_DELAYS_MS[attempt]));
+      continue;
+    }
+    break;
   }
 
   if (!response.ok) {
@@ -317,6 +357,9 @@ async function summarizeWithGemini(videoId, apiKey, model) {
     }
     if (status === 400) {
       throw new Error('Gemini rejected this video. It may be private, restricted, or unsupported.');
+    }
+    if ([500, 502, 503, 504].includes(status)) {
+      throw new Error('Gemini is overloaded. Try again in a moment.');
     }
     throw new Error(`Gemini API error (${status}).`);
   }
