@@ -144,16 +144,22 @@ function hideOverlay() {
  * Render card content based on state.
  */
 function renderCard(state) {
-  const pinClass = state.pinned ? 'getpeek-pin-btn getpeek-pin-active' : 'getpeek-pin-btn';
+  const pinClass = state.pinned ? 'getpeek-icon-btn getpeek-pin-btn getpeek-pin-active' : 'getpeek-icon-btn getpeek-pin-btn';
   const pinTitle = state.pinned ? 'Unpin' : 'Pin card';
-  const pinHtml = `<button class="${pinClass}" title="${pinTitle}">📌</button>`;
-  const closeHtml = `<button class="getpeek-close-btn" title="Close">×</button>`;
+  const pinSvg = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="17" x2="12" y2="22"/><path d="M5 17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1v4.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24Z"/></svg>`;
+  const closeSvg = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+  const bgSvg = `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="8 7 17 7 17 16"/></svg>`;
+  const pinHtml = `<button class="${pinClass}" title="${pinTitle}" aria-label="${pinTitle}">${pinSvg}</button>`;
+  const closeHtml = `<button class="getpeek-icon-btn getpeek-close-btn" title="Close" aria-label="Close">${closeSvg}</button>`;
   const bgHtml = state.showBgButton
-    ? `<button class="getpeek-bg-btn" title="Generate in background and add to side panel">↗ Background</button>`
+    ? `<button class="getpeek-bg-btn" title="Generate in background and add to side panel">${bgSvg}<span>Background</span></button>`
     : '';
   const headerHtml = `
     <div class="getpeek-header">
-      <span class="getpeek-logo">👁 GetPeek</span>
+      <span class="getpeek-logo">
+        <span class="getpeek-mark" aria-hidden="true"></span>
+        <span class="getpeek-wordmark">GetPeek</span>
+      </span>
       <div class="getpeek-actions">
         ${bgHtml}
         ${pinHtml}
@@ -231,22 +237,44 @@ function escapeHtml(str) {
 
 function getCardStyles() {
   return `
+    :host, .getpeek-card {
+      --gp-bg: #14110d;
+      --gp-surface: #1c1813;
+      --gp-surface-2: rgba(245, 222, 179, 0.04);
+      --gp-text: #f1ece2;
+      --gp-text-soft: #d6cfc1;
+      --gp-muted: #948b7c;
+      --gp-accent: #f5a524;
+      --gp-accent-soft: rgba(245, 165, 36, 0.12);
+      --gp-accent-border: rgba(245, 165, 36, 0.28);
+      --gp-divider: rgba(255, 240, 220, 0.07);
+      --gp-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(245, 165, 36, 0.06);
+      --gp-shallow: #f5c451;
+      --gp-moderate: #6aa9ff;
+      --gp-deep: #4ade80;
+      --gp-danger: #fca5a5;
+      --gp-danger-bg: rgba(239, 68, 68, 0.1);
+      --gp-danger-border: rgba(239, 68, 68, 0.22);
+    }
+
     .getpeek-card {
       position: fixed;
       width: 380px;
-      max-height: 420px;
+      max-height: 440px;
       overflow-y: auto;
-      background: #1a1a2e;
-      color: #e0e0e0;
-      border: 1px solid rgba(124, 58, 237, 0.4);
-      border-radius: 12px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(124, 58, 237, 0.1);
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--gp-bg);
+      background-image: radial-gradient(120% 60% at 0% 0%, rgba(245, 165, 36, 0.08), transparent 60%);
+      color: var(--gp-text);
+      border: 1px solid var(--gp-divider);
+      border-radius: 14px;
+      box-shadow: var(--gp-shadow);
+      font-family: -apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif;
       font-size: 13px;
-      line-height: 1.5;
-      padding: 16px;
+      line-height: 1.55;
+      padding: 14px 16px 16px;
       box-sizing: border-box;
       pointer-events: auto;
+      -webkit-font-smoothing: antialiased;
     }
 
     .getpeek-card::-webkit-scrollbar {
@@ -256,24 +284,42 @@ function getCardStyles() {
       background: transparent;
     }
     .getpeek-card::-webkit-scrollbar-thumb {
-      background: rgba(124, 58, 237, 0.3);
+      background: rgba(245, 165, 36, 0.25);
       border-radius: 3px;
+    }
+    .getpeek-card::-webkit-scrollbar-thumb:hover {
+      background: rgba(245, 165, 36, 0.45);
     }
 
     .getpeek-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 12px;
-      padding-bottom: 8px;
-      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      margin: -2px -2px 12px;
+      padding: 2px 2px 10px;
+      border-bottom: 1px solid var(--gp-divider);
     }
 
     .getpeek-logo {
-      font-size: 14px;
-      font-weight: 700;
-      color: #a78bfa;
-      letter-spacing: 0.5px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .getpeek-mark {
+      width: 14px;
+      height: 14px;
+      border-radius: 4px;
+      background: linear-gradient(135deg, #fbbf4a 0%, #f0851a 100%);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18), 0 0 0 1px rgba(245, 165, 36, 0.2);
+      flex-shrink: 0;
+    }
+
+    .getpeek-wordmark {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--gp-text);
+      letter-spacing: -0.01em;
     }
 
     .getpeek-actions {
@@ -283,99 +329,98 @@ function getCardStyles() {
     }
 
     .getpeek-bg-btn {
-      background: transparent;
-      border: 1px solid rgba(167, 139, 250, 0.35);
-      color: #a78bfa;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--gp-accent-soft);
+      border: 1px solid var(--gp-accent-border);
+      color: var(--gp-accent);
       font-size: 11px;
       font-weight: 600;
-      padding: 4px 8px;
-      border-radius: 6px;
+      padding: 4px 9px;
+      border-radius: 7px;
       cursor: pointer;
       font-family: inherit;
-      transition: background 0.15s, border-color 0.15s;
+      transition: background 0.15s, border-color 0.15s, transform 0.05s;
     }
 
     .getpeek-bg-btn:hover {
-      background: rgba(124, 58, 237, 0.15);
-      border-color: rgba(167, 139, 250, 0.6);
+      background: rgba(245, 165, 36, 0.18);
+      border-color: rgba(245, 165, 36, 0.45);
     }
 
-    .getpeek-pin-btn {
+    .getpeek-bg-btn:active {
+      transform: translateY(1px);
+    }
+
+    .getpeek-icon-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 24px;
+      height: 24px;
       background: transparent;
       border: 1px solid transparent;
-      color: #9ca3af;
-      font-size: 13px;
-      line-height: 1;
-      padding: 4px 6px;
+      color: var(--gp-muted);
+      padding: 0;
       border-radius: 6px;
       cursor: pointer;
       font-family: inherit;
-      filter: grayscale(1) opacity(0.7);
-      transition: filter 0.15s, background 0.15s, border-color 0.15s;
+      transition: background 0.15s, color 0.15s, border-color 0.15s;
     }
 
-    .getpeek-pin-btn:hover {
-      background: rgba(255, 255, 255, 0.06);
-      filter: grayscale(0) opacity(1);
+    .getpeek-icon-btn:hover {
+      background: rgba(255, 240, 220, 0.06);
+      color: var(--gp-text);
     }
 
     .getpeek-pin-active {
-      background: rgba(124, 58, 237, 0.2);
-      border-color: rgba(167, 139, 250, 0.5);
-      filter: grayscale(0) opacity(1);
+      background: var(--gp-accent-soft);
+      border-color: var(--gp-accent-border);
+      color: var(--gp-accent);
     }
 
-    .getpeek-close-btn {
-      background: transparent;
-      border: none;
-      color: #9ca3af;
-      font-size: 18px;
-      line-height: 1;
-      padding: 2px 8px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-family: inherit;
-    }
-
-    .getpeek-close-btn:hover {
-      background: rgba(255, 255, 255, 0.08);
-      color: #e5e7eb;
+    .getpeek-pin-active:hover {
+      background: rgba(245, 165, 36, 0.2);
+      color: var(--gp-accent);
     }
 
     .getpeek-bg-indicator {
       display: flex;
       align-items: center;
-      gap: 6px;
-      background: rgba(34, 197, 94, 0.08);
-      border: 1px solid rgba(34, 197, 94, 0.2);
-      border-radius: 6px;
-      padding: 6px 10px;
-      margin-bottom: 10px;
-      font-size: 11px;
-      color: #86efac;
+      gap: 8px;
+      background: rgba(74, 222, 128, 0.08);
+      border: 1px solid rgba(74, 222, 128, 0.22);
+      border-radius: 8px;
+      padding: 7px 10px;
+      margin-bottom: 12px;
+      font-size: 11.5px;
+      color: #a7f0ba;
     }
 
     .getpeek-bg-indicator span:first-child {
       color: #4ade80;
       font-weight: 700;
+      font-size: 13px;
+      line-height: 1;
     }
 
     .getpeek-loading {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 12px;
-      padding: 24px 0;
-      color: #9ca3af;
+      gap: 14px;
+      padding: 28px 0;
+      color: var(--gp-muted);
     }
 
     .getpeek-spinner {
-      width: 28px;
-      height: 28px;
-      border: 3px solid rgba(124, 58, 237, 0.2);
-      border-top-color: #7c3aed;
+      width: 26px;
+      height: 26px;
+      border: 2.5px solid rgba(245, 165, 36, 0.18);
+      border-top-color: var(--gp-accent);
       border-radius: 50%;
-      animation: getpeek-spin 0.8s linear infinite;
+      animation: getpeek-spin 0.7s linear infinite;
     }
 
     @keyframes getpeek-spin {
@@ -385,21 +430,22 @@ function getCardStyles() {
     .getpeek-error {
       display: flex;
       align-items: flex-start;
-      gap: 8px;
+      gap: 10px;
       padding: 12px;
-      background: rgba(239, 68, 68, 0.1);
-      border: 1px solid rgba(239, 68, 68, 0.2);
-      border-radius: 8px;
-      color: #fca5a5;
+      background: var(--gp-danger-bg);
+      border: 1px solid var(--gp-danger-border);
+      border-radius: 10px;
+      color: var(--gp-danger);
     }
 
     .getpeek-error-icon {
       flex-shrink: 0;
       font-size: 16px;
+      line-height: 1;
     }
 
     .getpeek-section {
-      margin-bottom: 12px;
+      margin-bottom: 14px;
     }
 
     .getpeek-section:last-child {
@@ -407,23 +453,37 @@ function getCardStyles() {
     }
 
     .getpeek-section-title {
-      font-size: 11px;
-      font-weight: 600;
+      font-size: 10px;
+      font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 1px;
-      color: #7c3aed;
+      letter-spacing: 0.12em;
+      color: var(--gp-accent);
       margin: 0 0 8px 0;
     }
 
     .getpeek-summary {
       margin: 0;
-      padding: 0 0 0 18px;
-      list-style: disc;
+      padding: 0;
+      list-style: none;
     }
 
     .getpeek-summary li {
-      margin-bottom: 4px;
-      color: #d1d5db;
+      position: relative;
+      padding-left: 14px;
+      margin-bottom: 6px;
+      color: var(--gp-text-soft);
+    }
+
+    .getpeek-summary li::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0.6em;
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--gp-accent);
+      opacity: 0.7;
     }
 
     .getpeek-summary li:last-child {
@@ -432,9 +492,8 @@ function getCardStyles() {
 
     .getpeek-recommendation-intro {
       font-size: 12px;
-      color: #9ca3af;
-      margin: 0 0 8px 0;
-      font-style: italic;
+      color: var(--gp-muted);
+      margin: 0 0 10px 0;
     }
 
     .getpeek-topics {
@@ -444,98 +503,91 @@ function getCardStyles() {
     }
 
     .getpeek-topic {
-      background: rgba(255, 255, 255, 0.04);
-      border-radius: 8px;
-      padding: 10px;
+      background: var(--gp-surface-2);
+      border: 1px solid var(--gp-divider);
+      border-radius: 10px;
+      padding: 10px 12px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+
+    .getpeek-topic:hover {
+      border-color: rgba(245, 165, 36, 0.18);
+      background: rgba(245, 222, 179, 0.05);
     }
 
     .getpeek-topic-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 10px;
       margin-bottom: 4px;
     }
 
     .getpeek-topic-name {
       font-weight: 600;
-      color: #e5e7eb;
-      font-size: 13px;
+      color: var(--gp-text);
+      font-size: 12.5px;
     }
 
     .getpeek-depth {
-      font-size: 10px;
+      font-size: 9.5px;
       font-weight: 700;
       text-transform: uppercase;
-      letter-spacing: 0.5px;
-      padding: 2px 8px;
-      border-radius: 10px;
+      letter-spacing: 0.06em;
+      padding: 2px 7px;
+      border-radius: 999px;
+      flex-shrink: 0;
     }
 
     .getpeek-depth-shallow {
-      background: rgba(251, 191, 36, 0.15);
-      color: #fbbf24;
+      background: rgba(245, 196, 81, 0.14);
+      color: var(--gp-shallow);
     }
 
     .getpeek-depth-moderate {
-      background: rgba(59, 130, 246, 0.15);
-      color: #60a5fa;
+      background: rgba(106, 169, 255, 0.14);
+      color: var(--gp-moderate);
     }
 
     .getpeek-depth-deep {
-      background: rgba(34, 197, 94, 0.15);
-      color: #4ade80;
+      background: rgba(74, 222, 128, 0.14);
+      color: var(--gp-deep);
     }
 
     .getpeek-topic-context {
       margin: 0;
       font-size: 12px;
-      color: #9ca3af;
+      color: var(--gp-muted);
+      line-height: 1.5;
     }
 
     @media (prefers-color-scheme: light) {
+      :host, .getpeek-card {
+        --gp-bg: #fdfbf7;
+        --gp-surface: #ffffff;
+        --gp-surface-2: rgba(120, 90, 40, 0.04);
+        --gp-text: #1c1813;
+        --gp-text-soft: #3a342b;
+        --gp-muted: #807870;
+        --gp-accent: #c2710c;
+        --gp-accent-soft: rgba(194, 113, 12, 0.08);
+        --gp-accent-border: rgba(194, 113, 12, 0.22);
+        --gp-divider: rgba(28, 24, 19, 0.08);
+        --gp-shadow: 0 12px 32px rgba(28, 24, 19, 0.12), 0 0 0 1px rgba(194, 113, 12, 0.06);
+        --gp-shallow: #b45309;
+        --gp-moderate: #1d4ed8;
+        --gp-deep: #15803d;
+        --gp-danger: #b91c1c;
+        --gp-danger-bg: rgba(239, 68, 68, 0.06);
+        --gp-danger-border: rgba(239, 68, 68, 0.18);
+      }
+
       .getpeek-card {
-        background: #ffffff;
-        color: #1f2937;
-        border-color: rgba(124, 58, 237, 0.25);
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(124, 58, 237, 0.08);
+        background-image: radial-gradient(120% 60% at 0% 0%, rgba(245, 165, 36, 0.05), transparent 60%);
       }
 
-      .getpeek-summary li {
-        color: #374151;
-      }
-
-      .getpeek-topic {
-        background: rgba(0, 0, 0, 0.03);
-      }
-
-      .getpeek-topic-name {
-        color: #1f2937;
-      }
-
-      .getpeek-topic-context {
-        color: #6b7280;
-      }
-
-      .getpeek-recommendation-intro {
-        color: #6b7280;
-      }
-
-      .getpeek-error {
-        background: rgba(239, 68, 68, 0.05);
-        color: #dc2626;
-      }
-
-      .getpeek-loading {
-        color: #6b7280;
-      }
-
-      .getpeek-bg-btn {
-        border-color: rgba(124, 58, 237, 0.3);
-        color: #7c3aed;
-      }
-
-      .getpeek-bg-btn:hover {
-        background: rgba(124, 58, 237, 0.08);
+      .getpeek-icon-btn:hover {
+        background: rgba(28, 24, 19, 0.06);
       }
 
       .getpeek-bg-indicator {
